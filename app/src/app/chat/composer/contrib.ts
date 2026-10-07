@@ -20,9 +20,13 @@
  * draft, pass it through, or cancel the send by returning null.
  */
 
+import { useMemo } from 'react'
+
 import { useContributions } from '@/contrib/react/use-contributions'
 import { registry } from '@/contrib/registry'
+import type { TodoItem } from '@/lib/todos'
 import type { ComposerAttachment } from '@/store/composer'
+import type { ComposerAction } from '@/store/composer-actions'
 
 export const COMPOSER_AREAS = {
   top: 'composer.top',
@@ -120,8 +124,38 @@ export function useComposerAttachmentProviders(): Array<ComposerAttachmentProvid
     .filter(p => Boolean(p.label && p.run))
 }
 
-// NOTE(web port): upstream also defines `ComposerMicroActionProvider` /
-// `useComposerMicroActionProviders` here, backed by `@/store/composer-actions`.
-// That store is not ported yet; the `composer.microActions` area id is kept in
-// COMPOSER_AREAS for id stability, but the provider surface lands with the
-// composer-actions port.
+/**
+ * Payload of a `composer.microActions` data contribution — the pill strip at
+ * the top of the composer's overlay lane.
+ *
+ * `resolve` is called with the live session context and returns the badges to
+ * show right now, or `[]` for "nothing from me". Returning a list rather than
+ * a static badge is what lets a provider be conditional ("only while idle",
+ * "only with unfinished tasks") without a reactive `when()`, which the
+ * registry deliberately doesn't offer.
+ */
+export interface ComposerMicroActionProvider {
+  resolve: (ctx: ComposerMicroActionContext) => ComposerAction[]
+}
+
+/** What a micro-action provider gets to branch on. Deliberately small: every
+ *  field here is a standing compatibility promise to the plugins using it. */
+export interface ComposerMicroActionContext {
+  /** A turn is currently running in this session. */
+  busy: boolean
+  sessionId: string
+  /** Live todo list for the session (empty when there is none). */
+  todos: readonly TodoItem[]
+}
+
+/** Micro-action providers, memoised against the registry's own stable
+ *  snapshot — the strip re-resolves on every composer render, so a fresh array
+ *  here would defeat that. */
+export function useComposerMicroActionProviders(): ComposerMicroActionProvider[] {
+  const contributions = useContributions(COMPOSER_AREAS.microActions)
+
+  return useMemo(
+    () => contributions.map(c => c.data as ComposerMicroActionProvider).filter(p => typeof p?.resolve === 'function'),
+    [contributions]
+  )
+}

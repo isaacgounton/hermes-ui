@@ -603,9 +603,6 @@ export const en: Translations = {
       remoteUrlDesc: 'Base URL for the remote dashboard backend. Path prefixes are supported, for example /hermes.',
       probing: 'Checking how this gateway authenticates…',
       probeError: 'Could not reach this gateway yet. Check the URL — the auth method will appear once it responds.',
-      crossOriginTitle: 'Gateway must be same-origin',
-      crossOriginError:
-        "A browser can only reach a gateway served from this site. Enter it as a /prefix path routed to that gateway by your reverse proxy, or use the desktop app for a gateway on another host. An http gateway also can't be reached from this https page.",
       signedIn: 'Signed in',
       signIn: 'Sign in',
       signOut: 'Sign out',
@@ -1441,21 +1438,6 @@ export const en: Translations = {
     failedRename: 'Failed to rename profile'
   },
 
-  gateways: {
-    title: 'Gateways',
-    active: 'active',
-    switchTo: 'Switch to',
-    manage: 'Manage gateways',
-    add: 'Add gateway',
-    name: 'Name',
-    namePlaceholder: 'e.g. Personal, Company',
-    url: 'Gateway URL',
-    saved: 'Saved gateways',
-    remove: 'Remove',
-    removeConfirm: 'Remove this gateway connection?',
-    current: 'Current'
-  },
-
   cron: {
     close: 'Close cron',
     title: 'Scheduled jobs',
@@ -1627,8 +1609,6 @@ export const en: Translations = {
     groupAriaUngrouped: 'Group sessions by workspace',
     showProjects: 'Show projects',
     showSessions: 'Show sessions',
-    showCronSessions: 'Show cron job sessions',
-    hideCronSessions: 'Hide cron job sessions',
     groupTitleGrouped: 'Ungroup sessions',
     groupTitleUngrouped: 'Group by workspace',
     allPinned: 'Everything here is pinned. Unpin a chat to show it in recents.',

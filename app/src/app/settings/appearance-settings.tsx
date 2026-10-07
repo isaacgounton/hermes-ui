@@ -12,7 +12,7 @@ import { Check, Download, Loader2, Palette, Trash2 } from '@/lib/icons'
 import { selectableCardClass } from '@/lib/selectable-card'
 import { normalize } from '@/lib/text'
 import { cn } from '@/lib/utils'
-import { supportsMarketplaceThemes, supportsWindowZoom } from '@/lib/web-platform'
+import { $backdrop, setBackdrop } from '@/store/backdrop'
 import { $embedAllowed, $embedMode, clearEmbedAllowed, type EmbedMode, setEmbedMode } from '@/store/embed-consent'
 import { $activeGatewayProfile, $profiles, normalizeProfileKey } from '@/store/profile'
 import { $toolViewMode, setToolViewMode } from '@/store/tool-view'
@@ -249,6 +249,7 @@ export function AppearanceSettings() {
   const embedMode = useStore($embedMode)
   const embedAllowed = useStore($embedAllowed)
   const translucency = useStore($translucency)
+  const backdrop = useStore($backdrop)
   const installs = useStore($marketplaceInstalls)
   const profiles = useStore($profiles)
   const activeProfileKey = normalizeProfileKey(useStore($activeGatewayProfile))
@@ -385,9 +386,7 @@ export function AppearanceSettings() {
                       })}
                     </div>
                   )}
-                  {supportsMarketplaceThemes() ? (
-                    <MarketplaceThemeResults installs={installs} onInstalled={name => setTheme(name)} query={query} />
-                  ) : null}
+                  <MarketplaceThemeResults installs={installs} onInstalled={name => setTheme(name)} query={query} />
                 </div>
                 {showProfileNote && (
                   <p className="mt-3 text-[length:var(--conversation-caption-font-size)] leading-(--conversation-caption-line-height) text-(--ui-text-tertiary)">
@@ -413,22 +412,20 @@ export function AppearanceSettings() {
             wide
           />
 
-          {supportsWindowZoom() && (
-            <ListRow
-              action={
-                <SegmentedControl
-                  onChange={id => {
-                    triggerHaptic('selection')
-                    setZoomPercent(Number(id))
-                  }}
-                  options={uiScaleOptions}
-                  value={matchedScalePreset ?? ('' as UiScalePreset)}
-                />
-              }
-              description={a.uiScaleDesc(zoomPercent)}
-              title={a.uiScaleTitle}
-            />
-          )}
+          <ListRow
+            action={
+              <SegmentedControl
+                onChange={id => {
+                  triggerHaptic('selection')
+                  setZoomPercent(Number(id))
+                }}
+                options={uiScaleOptions}
+                value={matchedScalePreset ?? ('' as UiScalePreset)}
+              />
+            }
+            description={a.uiScaleDesc(zoomPercent)}
+            title={a.uiScaleTitle}
+          />
 
           <ListRow
             action={
@@ -454,6 +451,24 @@ export function AppearanceSettings() {
             }
             description={a.translucencyDesc}
             title={a.translucencyTitle}
+          />
+
+          <ListRow
+            action={
+              <SegmentedControl
+                onChange={id => {
+                  triggerHaptic('selection')
+                  setBackdrop(id === 'on')
+                }}
+                options={[
+                  { id: 'off', label: t.common.off },
+                  { id: 'on', label: t.common.on }
+                ]}
+                value={backdrop ? 'on' : 'off'}
+              />
+            }
+            description={a.backdropDesc}
+            title={a.backdropTitle}
           />
 
           <ListRow

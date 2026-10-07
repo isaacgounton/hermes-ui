@@ -6,37 +6,22 @@
  * (`<id>:<localId>`), so authors write plain contributions and collisions
  * between plugins are impossible.
  *
- * Bundled plugins live in `src/plugins/<name>/plugin.{js,ts,tsx}` and are
- * discovered by `discoverBundledPlugins()` (contrib/plugins.ts) — no import,
- * no registry edit.
- *
- * Web port notes (vs upstream apps/desktop/src/contrib/plugin.ts):
- *  - `socket` resolves to a no-op disposer. Upstream documents the socket as
- *    "an accelerator over your polling, never a replacement" (it already
- *    no-ops on OAuth remotes), so consumers keep working off their polling
- *    fallback here too.
- *  - `os.notify` is inert: the web notification store has no plugin kind or
- *    per-plugin gating yet, and the door's contract is result-shaped
- *    degradation, never a throw.
- *  - `os.revealPath` always resolves false (no file manager on the web).
+ * Bundled plugins live in `src/plugins/<name>/plugin.tsx` and are discovered
+ * by `discoverBundledPlugins()` (contrib/plugins.ts) — no import, no registry
+ * edit. Runtime-fetched third-party plugins will drive the SAME contract
+ * through the plugin host loader (next phase); this is that seam.
  */
 
-import { pluginRest, type PluginRestOptions } from '@/hermes'
+import { pluginRest, type PluginRestOptions, pluginSocket } from '@/hermes'
 import { createPluginI18n, type PluginI18n } from '@/i18n'
 import { readKey, writeKey } from '@/lib/storage'
+import { dispatchPluginNativeNotification, type PluginNativeNotificationInput } from '@/store/native-notifications'
 
 import { registry } from './registry'
 import type { Contribution } from './types'
 
 export type { PluginRestOptions } from '@/hermes'
-
-/** Native-notification payload a plugin may hand to `os.notify`. Kept for
- *  authoring-contract parity with upstream; inert on the web (see above). */
-export interface PluginNativeNotificationInput {
-  title: string
-  body?: string
-  silent?: boolean
-}
+export type { PluginNativeNotificationInput } from '@/store/native-notifications'
 
 /** A contribution as a plugin author writes it — provenance + id scoping are
  *  the host's job, so those fields are off-limits here. */
@@ -50,18 +35,22 @@ export interface PluginStorage {
   remove(key: string): void
 }
 
-/** The curated OS door — every way a plugin reaches outside the app window.
- *  Every member resolves a result instead of throwing when the capability
- *  can't apply (plain browser, no shell), so callers branch on the return
- *  value rather than sniffing the bridge. */
+/** The curated OS door — every way a plugin reaches outside the app window,
+ *  in one attributed namespace instead of the raw `window.hermesDesktop`
+ *  bridge. Every member resolves a result instead of throwing when the
+ *  capability can't apply (no Electron shell, older desktop build), so
+ *  callers branch on the return value rather than sniffing the bridge. */
 export interface PluginOs {
-  /** Native OS notification. Inert on the web build — use `host.notify` for
-   *  the in-app toast. */
+  /** Native OS notification (Electron), attributed to this plugin. Gated by
+   *  Settings ▸ Notifications ▸ "Plugin notifications" and fires only while
+   *  the user is away from Hermes — use `host.notify` for the in-app toast.
+   *  Throttled per plugin; reserve it for genuinely notable events. */
   notify: (input: PluginNativeNotificationInput) => void
-  /** Open a URL with the default handler. Resolves false when the shell
-   *  can't. */
+  /** Open a URL with the OS default handler (browser, mail client, custom
+   *  schemes like `spotify:`). Resolves false when the shell can't. */
   openExternal: (url: string) => Promise<boolean>
-  /** Reveal a path in the OS file manager. Always false on the web. */
+  /** Reveal a path in the OS file manager (Finder / Explorer). Resolves
+   *  false when unavailable. */
   revealPath: (path: string) => Promise<boolean>
   /** Write text to the system clipboard. Resolves false when unavailable. */
   writeClipboard: (text: string) => Promise<boolean>
@@ -83,11 +72,14 @@ export interface PluginContext {
    *  `plugin_api.py` — profile-aware, namespace-scoped by construction. Use
    *  `host.request` for gateway JSON-RPC. */
   rest: <T>(path: string, opts?: PluginRestOptions) => Promise<T>
-  /** Live twin of `rest`. On the web build this resolves to a no-op disposer —
-   *  treat the socket as an accelerator over your polling, never a
-   *  replacement. */
+  /** Live twin of `rest`: a WebSocket to this plugin's own namespace
+   *  ('/events'), JSON frames to `onMessage`, auto-reconnect, disposer
+   *  returned. Resolves to a no-op on OAuth remotes — treat it as an
+   *  accelerator over your polling, never a replacement. */
   socket: (path: string, onMessage: (data: unknown) => void) => () => void
-  /** The curated OS door (see `PluginOs` for the web degradations). */
+  /** The curated OS door: native notification, open-external, reveal-in-file-
+   *  manager, clipboard — attributed to this plugin, result-shaped (never
+   *  throws for a missing capability). */
   os: PluginOs
   /** Plugin-scoped persistence. */
   storage: PluginStorage
@@ -133,9 +125,10 @@ function createPluginStorage(pluginId: string): PluginStorage {
   }
 }
 
-// Never throws for a missing capability: every door degrades to a false
-// result the plugin can branch on.
-function createPluginOs(): PluginOs {
+// Never throws for a missing capability: the renderer can outlive an older
+// Electron shell (or run in a plain browser), so every door degrades to a
+// false result the plugin can branch on.
+function createPluginOs(pluginId: string): PluginOs {
   const attempt = async (run: (bridge: NonNullable<typeof window.hermesDesktop>) => Promise<boolean>) => {
     const bridge = typeof window === 'undefined' ? undefined : window.hermesDesktop
 
@@ -151,15 +144,15 @@ function createPluginOs(): PluginOs {
   }
 
   return {
-    notify: () => undefined,
+    notify: input => dispatchPluginNativeNotification(pluginId, input),
     openExternal: url =>
       attempt(async bridge => {
         await bridge.openExternal(url)
 
         return true
       }),
-    revealPath: () => Promise.resolve(false),
-    writeClipboard: text => attempt(async bridge => bridge.writeClipboard(text))
+    revealPath: path => attempt(async bridge => (bridge.revealPath ? bridge.revealPath(path) : false)),
+    writeClipboard: text => attempt(bridge => bridge.writeClipboard(text))
   }
 }
 
@@ -181,8 +174,8 @@ export function createPluginContext(pluginId: string, onDispose?: (dispose: () =
     registerMany: cs => track(registry.registerMany(cs.map(scope))),
     onDispose: fn => void track(fn),
     rest: <T>(path: string, opts?: PluginRestOptions) => pluginRest<T>(pluginId, path, opts),
-    socket: () => track(() => undefined),
-    os: createPluginOs(),
+    socket: (path, onMessage) => track(pluginSocket(pluginId, path, onMessage)),
+    os: createPluginOs(pluginId),
     storage: createPluginStorage(pluginId),
     i18n: createPluginI18n(pluginId, track)
   }

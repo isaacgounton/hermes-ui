@@ -655,9 +655,6 @@ export const zhHant = defineLocale({
       remoteUrlDesc: '遠端儀表板後端的基礎 URL。支援路徑前綴，例如 /hermes。',
       probing: '正在檢查此閘道的驗證方式…',
       probeError: '暫時無法連線此閘道。請檢查 URL；閘道回應後將顯示驗證方式。',
-      crossOriginTitle: '閘道必須同源',
-      crossOriginError:
-        '瀏覽器只能連線由本網站提供的閘道。請將其填寫為由反向代理轉發到該閘道的 /prefix 路徑，或對位於其他主機的閘道使用桌面應用程式。此外，本 https 頁面也無法連線 http 閘道。',
       signedIn: '已登入',
       signIn: '登入',
       signOut: '登出',
@@ -1322,21 +1319,6 @@ export const zhHant = defineLocale({
     failedRename: '重新命名設定檔失敗'
   },
 
-  gateways: {
-    title: '閘道',
-    active: '目前',
-    switchTo: '切換到',
-    manage: '管理閘道',
-    add: '新增閘道',
-    name: '名稱',
-    namePlaceholder: '例如：個人、公司',
-    url: '閘道 URL',
-    saved: '已儲存的閘道',
-    remove: '移除',
-    removeConfirm: '要移除此閘道連線嗎？',
-    current: '目前'
-  },
-
   cron: {
     close: '關閉排程',
     title: '排程工作',
@@ -1507,8 +1489,6 @@ export const zhHant = defineLocale({
     groupAriaUngrouped: '依工作區分組工作階段',
     showProjects: '顯示專案',
     showSessions: '顯示工作階段',
-    showCronSessions: '顯示排程工作階段',
-    hideCronSessions: '隱藏排程工作階段',
     groupTitleGrouped: '取消分組',
     groupTitleUngrouped: '依工作區分組',
     allPinned: '這裡的全部已釘選。取消釘選某個聊天即可在最近中顯示。',

@@ -798,9 +798,6 @@ export const zh: Translations = {
       remoteUrlDesc: '远程 dashboard 后端的基础 URL。支持路径前缀，例如 /hermes。',
       probing: '正在检查此网关的认证方式…',
       probeError: '暂时无法访问此网关。请检查 URL；网关响应后会显示认证方式。',
-      crossOriginTitle: '网关必须同源',
-      crossOriginError:
-        '浏览器只能访问由本站点提供的网关。请将其填写为由反向代理转发到该网关的 /prefix 路径，或对位于其他主机的网关使用桌面应用。此外，本 https 页面也无法访问 http 网关。',
       signedIn: '已登录',
       signIn: '登录',
       signOut: '退出登录',
@@ -1625,21 +1622,6 @@ export const zh: Translations = {
     failedRename: '重命名配置档案失败'
   },
 
-  gateways: {
-    title: '网关',
-    active: '当前',
-    switchTo: '切换到',
-    manage: '管理网关',
-    add: '添加网关',
-    name: '名称',
-    namePlaceholder: '例如：个人、公司',
-    url: '网关 URL',
-    saved: '已保存的网关',
-    remove: '移除',
-    removeConfirm: '要移除此网关连接吗？',
-    current: '当前'
-  },
-
   cron: {
     close: '关闭定时任务',
     title: '定时任务',
@@ -1810,8 +1792,6 @@ export const zh: Translations = {
     groupAriaUngrouped: '按工作区分组会话',
     showProjects: '显示项目',
     showSessions: '显示会话',
-    showCronSessions: '显示定时任务会话',
-    hideCronSessions: '隐藏定时任务会话',
     groupTitleGrouped: '取消分组',
     groupTitleUngrouped: '按工作区分组',
     allPinned: '这里的全部已置顶。取消置顶某个对话即可在最近中显示。',

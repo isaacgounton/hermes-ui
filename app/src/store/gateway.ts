@@ -282,27 +282,6 @@ export function touchSecondaryGateways(): void {
 
 // Close + evict secondaries whose profile is neither active nor in `keep`
 // (profiles with a running / needs-input session). Bounds cost to live work.
-// Close and drop ONE profile's pooled secondary socket. Mirrors upstream's
-// retireLocalProfileGateways: a profile delete must retire the socket FIRST,
-// or its close-triggered reconnect (or an in-flight request) can touch
-// state.db mid-delete and resurrect the profile directory (upstream #52279).
-// Runs even for the active key — the caller re-homes to default afterwards.
-export function retireProfileGateway(profile: string): void {
-  const key = normKey(profile)
-  const entry = secondaries.get(key)
-
-  if (!entry) {
-    return
-  }
-
-  entry.wantOpen = false
-  clearTimer(entry)
-  entry.offEvent()
-  entry.offState()
-  entry.gateway.close()
-  secondaries.delete(key)
-}
-
 export function pruneSecondaryGateways(keep: Set<string>): void {
   for (const [key, entry] of [...secondaries]) {
     if (key === activeKey || keep.has(key)) {

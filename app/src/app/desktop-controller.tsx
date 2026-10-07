@@ -1,13 +1,8 @@
-// Plugin-system boot (import-time side effect): bundled plugins register
-// their contributions before the first render — see app/contrib/boot.ts.
-import '@/app/contrib/boot'
-
 import { useStore } from '@nanostores/react'
 import { useQueryClient } from '@tanstack/react-query'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 
-import { contributedPaneWidth, ContributedRightPaneBody, useWorkspaceRightPanes } from '@/app/contrib/pane-host'
 import { BootFailureOverlay } from '@/components/boot-failure-overlay'
 import { DesktopInstallOverlay } from '@/components/desktop-install-overlay'
 import { GatewayConnectingOverlay } from '@/components/gateway-connecting-overlay'
@@ -18,7 +13,6 @@ import { useMediaQuery } from '@/hooks/use-media-query'
 import { isFocusWithin } from '@/lib/keybinds/combo'
 import { cn } from '@/lib/utils'
 import { useSkinCommand } from '@/themes/use-skin-command'
-import { $activeGatewayId } from '@/web-bridge/gateways'
 
 import { formatRefValue } from '../components/assistant-ui/directive-text'
 import { getSessionMessages, type SessionMessage, triggerCronJob } from '../hermes'
@@ -31,7 +25,6 @@ import {
   $fileBrowserOpen,
   $panesFlipped,
   $pinnedSessionIds,
-  $sidebarShowCronSessions,
   FILE_BROWSER_DEFAULT_WIDTH,
   FILE_BROWSER_MAX_WIDTH,
   FILE_BROWSER_MIN_WIDTH,
@@ -194,7 +187,6 @@ export function DesktopController() {
   const messagingTranscriptSignatureRef = useRef(new Map<string, string>())
 
   const gatewayState = useStore($gatewayState)
-  const activeGatewayId = useStore($activeGatewayId)
   const activeSessionId = useStore($activeSessionId)
   const currentCwd = useStore($currentCwd)
   const freshDraftReady = useStore($freshDraftReady)
@@ -417,26 +409,6 @@ export function DesktopController() {
     }
 
     return onSessionsChanged(() => void refreshSessions().catch(() => undefined))
-  }, [refreshSessions])
-
-  // Toggling "show cron sessions" changes the recents exclude list (read at
-  // fetch time), so re-pull when it flips. Skip the initial fire.
-  useEffect(() => {
-    if (isSecondaryWindow()) {
-      return
-    }
-
-    let primed = false
-
-    return $sidebarShowCronSessions.subscribe(() => {
-      if (!primed) {
-        primed = true
-
-        return
-      }
-
-      void refreshSessions().catch(() => undefined)
-    })
   }, [refreshSessions])
 
   const toggleSelectedPin = useCallback(() => {
@@ -913,9 +885,7 @@ export function DesktopController() {
       gatewayRef.current = g
     },
     refreshHermesConfig,
-    refreshSessions,
-    // Re-boot against the newly-active gateway on a soft switch (no page reload).
-    restartKey: activeGatewayId
+    refreshSessions
   })
 
   useEffect(() => {
@@ -1212,25 +1182,6 @@ export function DesktopController() {
   // full-width row beneath them rather than cramming in one more skinny column.
   const terminalAsRow = terminalSidebarOpen && railColumnOpen
 
-  // Contributed right-edge panes (`area: 'panes'`, dock workspace/right) —
-  // e.g. Bot Mode's Cronjobs tile. Registered/unregistered live by plugins, so
-  // this list re-renders on registry mutations. The <Pane> wrappers must be
-  // direct PaneShell children (see pane-host), hence the inline array.
-  const contributedRightPanes = useWorkspaceRightPanes().map(pane => (
-    <Pane
-      disabled={!chatOpen}
-      divider
-      id={`contrib:${pane.id}`}
-      key={`contrib:${pane.id}`}
-      minWidth="200px"
-      resizable
-      side={railSide}
-      width={contributedPaneWidth(pane)}
-    >
-      <ContributedRightPaneBody pane={pane} />
-    </Pane>
-  ))
-
   const previewPane = (
     <Pane
       disabled={!chatOpen || (!previewTarget && !filePreviewTarget)}
@@ -1403,7 +1354,6 @@ export function DesktopController() {
         adjacent to the chat.
       */}
       {panesFlipped ? fileBrowserPane : terminalPane}
-      {contributedRightPanes}
       {previewPane}
       {reviewPane}
       {panesFlipped ? terminalPane : fileBrowserPane}

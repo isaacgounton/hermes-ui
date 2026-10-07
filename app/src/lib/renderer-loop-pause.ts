@@ -25,13 +25,8 @@ export function createRendererLoopPauseController(onChange: () => void, { pauseW
     }
   }
 
-  // Web port: this bridge event is typed against the older HermesWindowState
-  // shape here (and stubbed to a no-op unsubscribe on the web bridge), so the
-  // minimized/visible fields are read defensively instead of retyping the
-  // callback.
-  const offWindowState = window.hermesDesktop?.onWindowStateChanged?.(payload => {
-    const state = payload as unknown as WindowStatePayload
-    const next = state?.isMinimized === true || state?.isVisible === false
+  const offWindowState = window.hermesDesktop?.onWindowStateChanged?.((payload: WindowStatePayload) => {
+    const next = payload?.isMinimized === true || payload?.isVisible === false
 
     if (windowPaused === next) {
       return

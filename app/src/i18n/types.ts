@@ -507,8 +507,6 @@ export interface Translations {
       remoteUrlDesc: string
       probing: string
       probeError: string
-      crossOriginTitle: string
-      crossOriginError: string
       signedIn: string
       signIn: string
       signOut: string
@@ -1210,21 +1208,6 @@ export interface Translations {
     failedRename: string
   }
 
-  gateways: {
-    title: string
-    active: string
-    switchTo: string
-    manage: string
-    add: string
-    name: string
-    namePlaceholder: string
-    url: string
-    saved: string
-    remove: string
-    removeConfirm: string
-    current: string
-  }
-
   cron: {
     close: string
     title: string
@@ -1351,8 +1334,6 @@ export interface Translations {
     groupAriaUngrouped: string
     showProjects: string
     showSessions: string
-    showCronSessions: string
-    hideCronSessions: string
     groupTitleGrouped: string
     groupTitleUngrouped: string
     allPinned: string

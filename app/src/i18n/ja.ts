@@ -671,9 +671,6 @@ export const ja = defineLocale({
         'リモートダッシュボードバックエンドのベース URL。/hermes などのパスプレフィックスもサポートしています。',
       probing: 'このゲートウェイの認証方法を確認中…',
       probeError: 'このゲートウェイにまだ到達できません。URL を確認してください。応答後に認証方法が表示されます。',
-      crossOriginTitle: 'ゲートウェイは同一オリジンである必要があります',
-      crossOriginError:
-        'ブラウザーはこのサイトから配信されているゲートウェイにのみ接続できます。リバースプロキシでそのゲートウェイに転送される /prefix パスとして入力するか、別のホストのゲートウェイにはデスクトップアプリを使用してください。この https ページからは http ゲートウェイにも接続できません。',
       signedIn: 'サインイン済み',
       signIn: 'サインイン',
       signOut: 'サインアウト',
@@ -1369,21 +1366,6 @@ export const ja = defineLocale({
     failedRename: 'プロファイルの名前変更に失敗しました'
   },
 
-  gateways: {
-    title: 'ゲートウェイ',
-    active: 'アクティブ',
-    switchTo: '切り替え',
-    manage: 'ゲートウェイを管理',
-    add: 'ゲートウェイを追加',
-    name: '名前',
-    namePlaceholder: '例: 個人、会社',
-    url: 'ゲートウェイURL',
-    saved: '保存済みゲートウェイ',
-    remove: '削除',
-    removeConfirm: 'このゲートウェイ接続を削除しますか？',
-    current: '現在'
-  },
-
   cron: {
     close: 'Cron を閉じる',
     title: 'スケジュール済みジョブ',
@@ -1556,8 +1538,6 @@ export const ja = defineLocale({
     groupAriaUngrouped: 'ワークスペースごとにセッションをグループ化',
     showProjects: 'プロジェクトを表示',
     showSessions: 'セッションを表示',
-    showCronSessions: 'cronジョブのセッションを表示',
-    hideCronSessions: 'cronジョブのセッションを非表示',
     groupTitleGrouped: 'セッションのグループ化を解除',
     groupTitleUngrouped: 'ワークスペースでグループ化',
     allPinned: 'ここにあるものはすべてピン留めされています。チャットのピン留めを解除すると最近のものに表示されます。',

@@ -4,8 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useGatewayRequest } from '@/app/gateway/hooks/use-gateway-request'
 import { useOnProfileSwitch } from '@/app/hooks/use-on-profile-switch'
 import { useRouteOverlayActive } from '@/app/hooks/use-route-overlay-active'
+import { PetHeartField } from '@/components/chat/vibe-hearts'
 import { persistString, storedString } from '@/lib/storage'
-import { isWebPlatform } from '@/lib/web-platform'
 import {
   $petAtRest,
   $petInfo,
@@ -291,10 +291,8 @@ export function FloatingPet() {
     // Shift-click pops the pet out into a free-floating desktop overlay (it can
     // leave the window and stays visible while Hermes is minimized) instead of
     // starting an in-window drag. Primary window only — the overlay is anchored
-    // to it. The transparent OS window is Electron-only (petOverlay.open resolves
-    // {ok:false} in the web build), so in the browser fall through to a normal
-    // in-window drag rather than a no-op pop-out. The in-window pet stays.
-    if (e.shiftKey && !isSecondaryWindow() && !isWebPlatform()) {
+    // to it.
+    if (e.shiftKey && !isSecondaryWindow()) {
       popOutPet({ height: rect.height, width: rect.width, x: rect.left, y: rect.top })
 
       return
@@ -450,6 +448,9 @@ export function FloatingPet() {
       >
         <PetSprite info={info} rowOverride={walk.row} />
       </div>
+      {/* Hearts puff off the pet; its celebrate ("yay"/jump) pose is driven by
+          burstVibeHearts's router. */}
+      <PetHeartField petH={petH} petW={petW} />
     </div>
   )
 }

@@ -12,15 +12,15 @@
 import { useStore } from '@nanostores/react'
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 
+import { $registryVersion } from '@/contrib/registry'
 import { matchesQuery, useMediaQuery } from '@/hooks/use-media-query'
 import { persistString, persistStringRecord, storedString, storedStringRecord } from '@/lib/storage'
 import { $activeGatewayProfile, normalizeProfileKey } from '@/store/profile'
-import { refreshShellSnapshot } from '@/store/shell-snapshot'
 
 import { hexToRgb, mix, readableOn } from './color'
 import { BUILTIN_THEME_LIST, BUILTIN_THEMES, DEFAULT_SKIN_NAME, DEFAULT_TYPOGRAPHY, nousTheme } from './presets'
 import type { DesktopTheme, DesktopThemeColors } from './types'
-import { $userThemes, resolveTheme } from './user-themes'
+import { $userThemes, listAllThemes, resolveTheme } from './user-themes'
 
 // Legacy global skin (pre per-profile themes). Still the inheritance fallback
 // for any profile without its own assignment, so single-profile users and old
@@ -255,10 +255,6 @@ function applyTheme(theme: DesktopTheme, mode: 'light' | 'dark') {
     document.head.appendChild(link)
     INJECTED_FONT_URLS.add(typo.fontUrl)
   }
-
-  // Now that the theme's surface colors are live on :root, refresh the shell
-  // snapshot so the next cold boot's pre-paint skeleton matches this theme.
-  refreshShellSnapshot()
 }
 
 // Pin Electron's nativeTheme to the app's mode so the NATIVE window chrome
@@ -319,18 +315,22 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // behavior is unchanged.
   const profileKey = normalizeProfileKey(useStore($activeGatewayProfile))
 
-  // Built-ins + user-installed themes. Reactive so an import shows up live in
-  // the palette, settings grid, and `/skin` without a reload.
+  // Built-ins + user-installed + registry-contributed themes. Reactive so an
+  // import or a plugin registration shows up live in the palette, settings
+  // grid, and `/skin` without a reload.
   const userThemes = useStore($userThemes)
+  const registryVersion = useStore($registryVersion)
 
   const availableThemes = useMemo(
     () =>
-      [...Object.values(BUILTIN_THEMES), ...Object.values(userThemes)].map(({ name, label, description }) => ({
+      listAllThemes().map(({ name, label, description }) => ({
         name,
         label,
         description
       })),
-    [userThemes]
+    // userThemes + registryVersion ARE listAllThemes' reactivity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [userThemes, registryVersion]
   )
 
   const [themeName, setThemeNameState] = useState(() =>

@@ -35,23 +35,6 @@ const COMMON_CODE_LANGUAGES = new Set([
   'yml'
 ])
 
-// Fence tags that do NOT pin a code presentation: '' is an unlabelled fence,
-// and md/markdown is the well-known artifact of a model wrapping its whole
-// prose reply in a fence. These stay eligible for prose demotion. Everything
-// else that we recognize ('text', 'plain', 'diff', real code languages) is
-// explicit author intent and must keep its code-card rendering.
-const PROSE_WRAP_FENCE_LANGUAGES = new Set(['', 'md', 'markdown'])
-
-/** True when a sanitized tag names a recognized language that pins the fence
- * as intentional code/preformatted content (never prose-demotable). */
-export function isExplicitFenceLanguage(cleanLanguage: string): boolean {
-  return (
-    Boolean(cleanLanguage) &&
-    !PROSE_WRAP_FENCE_LANGUAGES.has(cleanLanguage) &&
-    (NON_CODE_FENCE_LANGUAGES.has(cleanLanguage) || COMMON_CODE_LANGUAGES.has(cleanLanguage))
-  )
-}
-
 interface CodeSignals {
   bulletLines: number
   codeSignals: number
@@ -315,10 +298,7 @@ export function isLikelyProseFence(info: string, body: string): boolean {
     return true
   }
 
-  // A bare recognized tag ('text', 'diff', 'ts', ...) pins the presentation;
-  // only unlabelled fences and the md/markdown wrap artifact fall through to
-  // the prose-signal heuristics.
-  if (!PROSE_WRAP_FENCE_LANGUAGES.has(language)) {
+  if (!NON_CODE_FENCE_LANGUAGES.has(language)) {
     return false
   }
 
@@ -330,18 +310,6 @@ export function isLikelyProseFence(info: string, body: string): boolean {
 
 export function isLikelyProseCodeBlock(language: string | undefined, code: string | undefined): boolean {
   const cleanLanguage = sanitizeLanguageTag(language || '')
-
-  // An explicit recognized language is author intent. Its contents may look
-  // like prose: `text` can contain a list of unit names and `diff` necessarily
-  // starts removed lines with `-`, which resembles Markdown bullets. Do not
-  // discard the requested code presentation; the heuristics below are only for
-  // unlabelled fences, unknown tags, and the md/markdown wrap artifact.
-  // (Checked before codeSignals so labelled fences skip the regex scans - this
-  // runs on every streaming re-render.)
-  if (isExplicitFenceLanguage(cleanLanguage)) {
-    return false
-  }
-
   const signals = codeSignals(code || '')
 
   if (!signals.trimmed || signals.codeSignals >= 3) {

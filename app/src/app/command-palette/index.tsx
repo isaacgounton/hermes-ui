@@ -47,7 +47,6 @@ import {
 } from '@/lib/icons'
 import { normalize } from '@/lib/text'
 import { cn } from '@/lib/utils'
-import { supportsMarketplaceThemes } from '@/lib/web-platform'
 import { $repoWorktrees } from '@/store/coding-status'
 import {
   $commandPaletteOpen,
@@ -119,6 +118,7 @@ interface PalettePage {
 }
 
 interface SessionEntry {
+  git_branch?: null | string
   id: string
   preview?: string
   title: string
@@ -213,6 +213,7 @@ const SESSION_ID_RE = /^\d{8}_\d{6}_[a-f0-9]{6}$/
 type SessionRow = Awaited<ReturnType<typeof listAllProfileSessions>>['sessions'][number]
 
 const toSessionEntry = (session: SessionRow): SessionEntry => ({
+  git_branch: session.git_branch ?? null,
   id: session.id,
   preview: session.preview ?? undefined,
   title: sessionTitle(session)
@@ -292,7 +293,6 @@ function themeSupportsMode(name: string, target: 'light' | 'dark'): boolean {
 
 export function CommandPalette() {
   const { t } = useI18n()
-  const contributedItems = usePaletteContributions()
   const open = useStore($commandPaletteOpen)
   const pendingPage = useStore($commandPalettePage)
   const bindings = useStore($bindings)
@@ -370,6 +370,8 @@ export function CommandPalette() {
       prettyName(key.split('.').pop() ?? key),
     [t.settings.fieldLabels]
   )
+
+  const contributedItems = usePaletteContributions()
 
   const baseGroups = useMemo<PaletteGroup[]>(() => {
     const settingsTab = (tab: string) => `${SETTINGS_ROUTE}?tab=${tab}`
@@ -468,24 +470,6 @@ export function CommandPalette() {
         ]
       },
       ...branchGroup,
-      // Registry-contributed rows (core features + plugins) — one group,
-      // omitted while nothing contributes.
-      ...(contributedItems.length > 0
-        ? [
-            {
-              heading: cc.commands,
-              items: contributedItems.map(item => ({
-                action: item.action,
-                icon: item.icon ?? Zap,
-                id: item.key,
-                keepOpen: item.keepOpen,
-                keywords: item.keywords,
-                label: item.label,
-                run: item.run
-              }))
-            }
-          ]
-        : []),
       {
         heading: cc.commandCenter,
         items: [
@@ -580,7 +564,24 @@ export function CommandPalette() {
             run: go(settingsTab(entry.tab))
           }))
         ]
-      }
+      },
+      // Registry-contributed rows (core features + plugins) — one group,
+      // omitted while nothing contributes.
+      ...(contributedItems.length > 0
+        ? [
+            {
+              heading: cc.commands,
+              items: contributedItems.map(item => ({
+                action: item.action,
+                icon: item.icon ?? Zap,
+                id: item.key,
+                keywords: item.keywords,
+                label: item.label,
+                run: item.run
+              }))
+            }
+          ]
+        : [])
     ]
   }, [contributedItems, go, settingsSectionLabel, t, worktrees])
 
@@ -685,7 +686,12 @@ export function CommandPalette() {
         items: sessions.map(session => ({
           icon: MessageCircle,
           id: `session-${session.id}`,
-          keywords: ['chat', 'session', ...(session.preview ? [session.preview] : [])],
+          keywords: [
+            'chat',
+            'session',
+            ...(session.preview ? [session.preview] : []),
+            ...(session.git_branch ? [session.git_branch] : [])
+          ],
           label: session.title,
           run: go(sessionRoute(session.id))
         }))
@@ -723,7 +729,13 @@ export function CommandPalette() {
         items: archivedSessions.map(session => ({
           icon: Archive,
           id: `archived-${session.id}`,
-          keywords: ['archived', 'chat', 'session', ...(session.preview ? [session.preview] : [])],
+          keywords: [
+            'archived',
+            'chat',
+            'session',
+            ...(session.preview ? [session.preview] : []),
+            ...(session.git_branch ? [session.git_branch] : [])
+          ],
           label: session.title,
           run: go(`${SETTINGS_ROUTE}?tab=sessions&session=${encodeURIComponent(session.id)}`)
         }))
@@ -756,24 +768,18 @@ export function CommandPalette() {
         title: t.settings.appearance.themeTitle,
         placeholder: t.settings.appearance.themeDesc,
         groups: [
-          // Pinned at the top: drills into the Marketplace browser. Hidden in the
-          // web build, where the gateway proxies no marketplace (the page would
-          // always be empty).
-          ...(supportsMarketplaceThemes()
-            ? [
-                {
-                  items: [
-                    {
-                      icon: Download,
-                      id: 'theme-install',
-                      keywords: ['install', 'marketplace', 'vscode', 'vs code', 'download', 'new', 'color'],
-                      label: t.commandCenter.installTheme.title,
-                      to: 'install-theme'
-                    }
-                  ]
-                }
-              ]
-            : []),
+          // Pinned at the top: drills into the Marketplace browser.
+          {
+            items: [
+              {
+                icon: Download,
+                id: 'theme-install',
+                keywords: ['install', 'marketplace', 'vscode', 'vs code', 'download', 'new', 'color'],
+                label: t.commandCenter.installTheme.title,
+                to: 'install-theme'
+              }
+            ]
+          },
           // Built-ins and imported families list under the mode(s) they support;
           // picking sets skin + mode at once. A multi-variant import (GitHub,
           // Solarized) appears in both groups and switches variants with the mode.
