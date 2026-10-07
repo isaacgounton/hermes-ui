@@ -107,10 +107,15 @@ done
 # the vendored paths for the new export. The working tree is never touched.
 export GIT_INDEX_FILE="$WORK/index"
 git read-tree "$VENDOR_BRANCH"
+targets=()
 for entry in "${VENDORED[@]}"; do
-  git rm -r -q --cached --ignore-unmatch -- "${entry#*:}"
+  targets+=("${entry#*:}")
+  # -f: the index is scratch; skip the safety check against the real worktree.
+  git rm -r -q -f --cached --ignore-unmatch -- "${entry#*:}"
 done
-(cd "$WORK/tree" && GIT_DIR="$ROOT/.git" git --work-tree="$WORK/tree" add -f -- .)
+# Only the vendored paths: `add .` against this partial tree would also stage
+# the deletion of every other tracked file.
+(cd "$WORK/tree" && GIT_DIR="$ROOT/.git" git --work-tree="$WORK/tree" add -f -- "${targets[@]}")
 TREE="$(git write-tree)"
 unset GIT_INDEX_FILE
 
