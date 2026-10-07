@@ -17,16 +17,10 @@ const $profileScope = atom<string>('default')
 vi.mock('@/store/profile', () => ({ $profileScope }))
 
 const $sessions = atom<SessionInfo[]>([])
-const $sessionsTotal = atom<number>(0)
-const $sessionProfileTotals = atom<Record<string, number>>({})
 
 vi.mock('@/store/session', () => ({
-  $sessionProfileTotals,
   $sessions,
-  $sessionsTotal,
-  setSessionProfileTotals: (v: Record<string, number>) => $sessionProfileTotals.set(v),
-  setSessions: (v: SessionInfo[]) => $sessions.set(v),
-  setSessionsTotal: (v: number) => $sessionsTotal.set(v)
+  setSessions: (v: SessionInfo[]) => $sessions.set(v)
 }))
 
 const { hydrateSidebarCache, writeSidebarCache } = await import('./sidebar-cache')
@@ -53,26 +47,18 @@ beforeEach(() => {
   activeUrl = 'http://127.0.0.1:9119'
   $profileScope.set('default')
   $sessions.set([])
-  $sessionsTotal.set(0)
-  $sessionProfileTotals.set({})
 })
 
 describe('sidebar-cache', () => {
   it('round-trips the recents list for the same gateway + profile', () => {
     $sessions.set([session('a'), session('b')])
-    $sessionsTotal.set(9)
-    $sessionProfileTotals.set({ default: 9 })
     writeSidebarCache('default')
 
     // Simulate a fresh boot: empty stores, then hydrate.
     $sessions.set([])
-    $sessionsTotal.set(0)
-    $sessionProfileTotals.set({})
     hydrateSidebarCache()
 
     expect($sessions.get().map(s => s.id)).toEqual(['a', 'b'])
-    expect($sessionsTotal.get()).toBe(9)
-    expect($sessionProfileTotals.get()).toEqual({ default: 9 })
   })
 
   it('never overwrites a non-empty list (stale cache cannot mask live data)', () => {

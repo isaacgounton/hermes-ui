@@ -8,7 +8,7 @@
 # redirect returns to the same origin the app was served from, so cookies and
 # the WebSocket ticket flow just work.
 #
-# Any arguments are passed straight through to 'hermes serve', so you can
+# Any arguments are passed straight through to 'hermes dashboard', so you can
 # change the port, e.g.:
 #   bin/prod
 #   bin/prod --port 9200
@@ -41,6 +41,6 @@ echo "Building the static bundle..."
 bun run build
 
 # Delegate the actual serving to the shared launcher, which validates dist/,
-# exports the absolute HERMES_WEB_DIST, and execs 'hermes serve'.
+# exports the absolute HERMES_WEB_DIST, and execs 'hermes dashboard'.
 echo "Serving the built bundle from the gateway..."
 exec "$ROOT/scripts/serve-on-gateway.sh" "$@"

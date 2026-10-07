@@ -37,7 +37,11 @@ function seedBlob(origin: string, buster: string, configData: unknown): void {
 }
 
 function persistedEntry(): { key: string; queryKeys: string[] } | null {
-  const key = Object.keys(localStorage).find(k => k.startsWith('hermes-rq-cache:'))
+  // Storage API, not Object.keys: vitest.setup's in-memory Storage shim (newer
+  // Node) only enumerates its methods.
+  const key = Array.from({ length: localStorage.length }, (_, i) => localStorage.key(i)).find(k =>
+    k?.startsWith('hermes-rq-cache:')
+  )
 
   if (!key) {
     return null

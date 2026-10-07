@@ -1,25 +1,29 @@
 /**
- * Plugin discovery — bundled delivery mode:
+ * Plugin discovery — both delivery modes:
  *
  *  - BUNDLED: every `src/plugins/<name>/plugin.{js,ts,tsx}` default-exporting
  *    a `HermesPlugin` registers automatically (vite glob — drop a folder in).
- *    `hermes-bots` (Bot Mode) ships in-tree and is ON by default. `.js`
- *    entries are SDK-consumer plugins adopted from upstream — they keep the
- *    plain-ESM plugin.js form so future upstream syncs stay a file copy.
- *
- * Web port note: upstream also watches the on-disk runtime doors
- * (`<hermes home>/desktop-plugins/…`) via contrib/runtime-loader.ts. That
- * pipeline needs the desktop bridge's filesystem watchers and is inert in a
- * browser, so the web build omits it entirely.
+ *    `hermes-bots` (Bot Mode) ships in-tree and is ON by default; other
+ *    reference/demo plugins live in the companion `hermes-example-plugins`
+ *    repo. `.js` entries are SDK-consumer plugins adopted from standalone
+ *    repos — they keep the plain-ESM plugin.js form so the file stays
+ *    loadable by older desktops' runtime door too.
+ *  - RUNTIME: the on-disk doors (`<hermes home>/desktop-plugins/<name>/plugin.js`
+ *    and the unified-package half `<hermes home>/plugins/<name>/desktop/plugin.js`)
+ *    — the agent's/user's doors, watched + hot-reloaded by the runtime loader.
  */
 
+import { trackGatewayEventDisposers } from './events'
 import { createPluginContext, type HermesPlugin } from './plugin'
 import { pluginActive, publishPlugin } from './plugins-store'
+import { watchRuntimePlugins } from './runtime-loader'
 
 const modules = import.meta.glob<{ default: HermesPlugin }>('../plugins/*/plugin.{js,ts,tsx}', { eager: true })
 
 // One-shot init guard. Contributions themselves register by id (re-registering
-// is idempotent), but discovery is guarded to a single pass, not re-run on HMR.
+// is idempotent), but the disk-door watcher setup below (watchRuntimePlugins)
+// must NOT run twice — so discovery is guarded to a single pass, not re-run on
+// HMR.
 let loaded = false
 
 export function discoverBundledPlugins(): void {
@@ -38,9 +42,9 @@ export function discoverBundledPlugins(): void {
       continue
     }
 
-    // Same inventory + live-toggle contract as upstream: each bundled plugin
-    // publishes a record with activate/deactivate handles, and a persisted
-    // disable survives boots by skipping registration here.
+    // Same inventory + live-toggle contract as runtime plugins: each bundled
+    // plugin publishes a record with activate/deactivate handles, and a
+    // persisted disable survives boots by skipping registration here.
     const record = {
       id: plugin.id,
       name: plugin.name ?? plugin.id,
@@ -55,7 +59,10 @@ export function discoverBundledPlugins(): void {
       disposers = []
 
       try {
-        plugin.register(createPluginContext(plugin.id, dispose => disposers.push(dispose)))
+        trackGatewayEventDisposers(
+          dispose => disposers.push(dispose),
+          () => plugin.register(createPluginContext(plugin.id, dispose => disposers.push(dispose)))
+        )
         publishPlugin({ ...record, status: 'loaded' })
       } catch (error) {
         console.error(`[plugins] ${plugin.id} failed to register`, error)
@@ -74,4 +81,8 @@ export function discoverBundledPlugins(): void {
       activate()
     }
   }
+
+  // The SELF-MAINTAINING disk door (fs-watched hot reloads, slow folder
+  // reconciliation) — the runtime loader pipeline's real, shipping consumer.
+  watchRuntimePlugins()
 }

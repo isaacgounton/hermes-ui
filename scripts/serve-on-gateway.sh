@@ -7,12 +7,12 @@
 # require this - see ../README.md).
 #
 # This resolves the absolute path to app/dist, verifies the build exists,
-# exports HERMES_WEB_DIST to that path, and execs `hermes serve`.
+# exports HERMES_WEB_DIST to that path, and execs `hermes dashboard`.
 #
 # Usage:
-#   scripts/serve-on-gateway.sh [extra hermes serve args...]
+#   scripts/serve-on-gateway.sh [extra hermes dashboard args...]
 #
-# Any arguments are passed straight through to `hermes serve`, so bind
+# Any arguments are passed straight through to `hermes dashboard`, so bind
 # host/port flags or anything else the gateway accepts work unchanged, e.g.:
 #   scripts/serve-on-gateway.sh --host 127.0.0.1 --port 9119
 #
@@ -48,7 +48,9 @@ fi
 export HERMES_WEB_DIST="${DIST_DIR}"
 
 echo "HERMES_WEB_DIST=${HERMES_WEB_DIST}" >&2
-echo "Starting: hermes serve $*" >&2
+echo "Starting: hermes dashboard --no-open $*" >&2
 
-# Hand off to the gateway, forwarding any extra args unchanged.
-exec hermes serve "$@"
+# Hand off to the gateway, forwarding any extra args unchanged. `hermes
+# dashboard` (not `hermes serve`, which is a headless JSON-RPC/WS backend with
+# the SPA mount switched off) serves the bundle at HERMES_WEB_DIST.
+exec hermes dashboard --no-open "$@"

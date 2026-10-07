@@ -46,12 +46,12 @@ Prefer the ready-made runner, from the repo root:
 
 ```sh
 ./bin/prod                # builds if needed, then serves from the gateway
-./bin/prod --port 9200    # extra args pass straight through to 'hermes serve'
+./bin/prod --port 9200    # extra args pass straight through to 'hermes dashboard'
 ```
 
 Keep the gateway on loopback (`127.0.0.1`, the default). Run the UI and the gateway on the same machine.
 
-`bin/prod` installs dependencies, builds, and hands off to `scripts/serve-on-gateway.sh`, which exports the absolute `HERMES_WEB_DIST` and execs `hermes serve`.
+`bin/prod` installs dependencies, builds, and hands off to `scripts/serve-on-gateway.sh`, which exports the absolute `HERMES_WEB_DIST` and execs `hermes dashboard` (`hermes serve` is headless and never serves a UI).
 If a gateway already occupies the target port, stop it first or choose another port, because two gateways cannot share a port.
 
 Open the gateway's URL (default `http://127.0.0.1:9119`).

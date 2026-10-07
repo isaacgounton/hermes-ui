@@ -20,22 +20,37 @@
  *    re-resolve the URL on every reconnect).
  */
 
+import type { GatewayWsUrlResult } from '@hermes/shared'
+
 import type {
+  DesktopActiveProfile,
   DesktopBootProgress,
   DesktopConnectionConfig,
   DesktopConnectionConfigInput,
+  DesktopConnectionsRegistry,
+  DesktopConnectionTestResult,
   DesktopOauthLoginResult,
+  DesktopProfileRoute,
+  DesktopRegistryConnection,
+  DesktopRegistryConnectionInput,
   HermesApiRequest,
-  HermesConnection,
-  HermesNotification
+  HermesConnection
 } from '@/global'
+
+import type { HermesNotification } from '../../electron/notification-types'
 
 import {
   activeUpstreamOrigin,
+  addGateway,
   classifyGatewayReach,
+  type GatewayConnection,
   getActiveGateway,
+  getGateway,
+  listGateways,
   normalizeBase,
+  removeGateway,
   servingBase,
+  setActiveGateway,
   syncDevGatewayCookie,
   updateGateway,
   upstreamOriginFor,
@@ -50,6 +65,8 @@ declare global {
      *  through the dev proxy (HERMES_GATEWAY_URL + config.json +
      *  HERMES_GATEWAY_WHITELIST; see vite.config.ts). */
     __HERMES_GATEWAY_WHITELIST__?: string[]
+    /** Set by web-bridge/install.ts; read by lib/web-platform isWebPlatform(). */
+    __HERMES_WEB__?: boolean
   }
 }
 
@@ -97,12 +114,60 @@ function baseUrl(): string {
 }
 
 /**
- * Token resolution order: gateway HTML injection (loopback/token mode), a
- * `?token=` URL param (persisted then stripped so it never lingers in the
- * address bar), a previously persisted param token, then a token saved on the
- * active gateway. Empty string means cookie (gated/OAuth) mode.
+ * Everything needed to talk to one saved gateway: its absolute base, the dev
+ * proxy route (`__hgw` upstream origin, null in production / for the default)
+ * and its auth token ('' = cookie / OAuth mode).
  */
-function resolveToken(): string {
+interface GatewayTarget {
+  gateway: GatewayConnection
+  base: string
+  origin: string | null
+  token: string
+}
+
+function targetFor(gateway: GatewayConnection): GatewayTarget {
+  const base = normalizeBase(gateway.url)
+
+  return { gateway, base, origin: upstreamOriginFor(gateway.url), token: resolveToken(gateway, base) }
+}
+
+/**
+ * Resolve a registry connection id to its gateway. Omitted / '' / 'local'
+ * mean the active gateway. Unknown ids reject with Electron's exact message,
+ * which upstream's store/gateway matches on to drop a stale route.
+ */
+function targetForId(connectionId?: null | string): GatewayTarget {
+  if (!connectionId || connectionId === 'local') {
+    return targetFor(getActiveGateway())
+  }
+
+  const gateway = getGateway(connectionId)
+
+  if (!gateway) {
+    throw new Error(`No connection with id "${connectionId}"`)
+  }
+
+  return targetFor(gateway)
+}
+
+/**
+ * Token resolution for one gateway. The serving gateway's own credential comes
+ * first: its HTML injection (loopback/token mode), a `?token=` URL param
+ * (persisted then stripped so it never lingers in the address bar), or a
+ * previously persisted param token. Otherwise the token saved on the gateway
+ * itself. Empty string means cookie (gated/OAuth) mode.
+ */
+function resolveToken(gateway: GatewayConnection = getActiveGateway(), base = normalizeBase(gateway.url)): string {
+  if (base === servingBase()) {
+    const served = servingToken()
+
+    if (served) {return served}
+  }
+
+  return gateway.authMode === 'token' ? (gateway.token ?? '') : ''
+}
+
+function servingToken(): string {
   if (window.__HERMES_SESSION_TOKEN__) {return window.__HERMES_SESSION_TOKEN__}
 
   try {
@@ -121,29 +186,34 @@ function resolveToken(): string {
 
     if (stored) {return stored}
   } catch {
-    // fall through to the active gateway's token
+    // no served token
   }
 
-  const gateway = getActiveGateway()
-
-  return gateway.authMode === 'token' ? (gateway.token ?? '') : ''
+  return ''
 }
 
-function wsBaseUrl(): string {
-  const httpBase = baseUrl()
-
-  return httpBase.replace(/^http/, 'ws')
+function buildTokenWsUrl(target: GatewayTarget): string {
+  return `${target.base.replace(/^http/, 'ws')}/api/ws?token=${encodeURIComponent(target.token)}`
 }
 
-function buildTokenWsUrl(token: string): string {
-  return `${wsBaseUrl()}/api/ws?token=${encodeURIComponent(token)}`
-}
+/**
+ * A fresh WS URL for one gateway. Token gateways embed the token; cookie
+ * gateways mint a single-use ticket per connect (30s TTL), which is why the
+ * descriptor advertises `authMode: 'oauth'` and the renderer re-resolves the URL
+ * on every reconnect. A 401/403 mint is a signed-out session: report it as
+ * `needsOauthLogin` so boot offers sign-in instead of a generic failure.
+ */
+async function gatewayWsUrl(target: GatewayTarget): Promise<GatewayWsUrlResult> {
+  if (target.token) {return withGatewayRoute(buildTokenWsUrl(target), target.origin)}
 
-async function mintWsTicket(origin: string | null): Promise<string> {
-  const res = await fetch(withGatewayRoute(`${baseUrl()}/api/auth/ws-ticket`, origin), {
+  const res = await fetch(withGatewayRoute(`${target.base}/api/auth/ws-ticket`, target.origin), {
     method: 'POST',
     credentials: 'same-origin'
   })
+
+  if (res.status === 401 || res.status === 403) {
+    return { ok: false, error: `${res.status}: sign in to ${target.gateway.name}`, needsOauthLogin: true }
+  }
 
   if (!res.ok) {
     throw new Error(`${res.status}: failed to mint websocket ticket`)
@@ -153,21 +223,25 @@ async function mintWsTicket(origin: string | null): Promise<string> {
 
   if (!body.ticket) {throw new Error('ws-ticket response had no ticket')}
 
-  return body.ticket
+  const wsBase = target.base.replace(/^http/, 'ws')
+
+  return withGatewayRoute(`${wsBase}/api/ws?ticket=${encodeURIComponent(body.ticket)}`, target.origin)
 }
 
 /**
- * True when the active gateway currently has a usable session. Token gateways
- * are "connected" if a token is present; OAuth/cookie gateways are probed via
- * the public-ish /api/auth/me (200 = signed in, 401 = not). Best-effort: any
+ * True when a gateway currently has a usable session. Token gateways are
+ * "connected" if a token is present; OAuth/cookie gateways are probed via the
+ * public-ish /api/auth/me (200 = signed in, 401 = not). Best-effort: any
  * failure reports not-connected so the UI offers a sign-in path rather than
- * falsely claiming a live session.
+ * falsely claiming a live session. The token is the PROBED gateway's (an OAuth
+ * login popup passes '' so another gateway's token can't end it early).
  */
 async function probeAuthConnected(
   base: string = baseUrl(),
-  origin: string | null = activeUpstreamOrigin()
+  origin: string | null = activeUpstreamOrigin(),
+  token: string = resolveToken()
 ): Promise<boolean> {
-  if (resolveToken()) {
+  if (token) {
     return true
   }
 
@@ -258,7 +332,7 @@ function openOauthLoginPopup(base: string, origin: string | null): Promise<Deskt
       void (async () => {
         if (settled) {return}
 
-        if (await probeAuthConnected(base, origin)) {
+        if (await probeAuthConnected(base, origin, '')) {
           finish(true)
 
           return
@@ -275,24 +349,34 @@ function openOauthLoginPopup(base: string, origin: string | null): Promise<Deskt
 const DEFAULT_API_TIMEOUT_MS = 30_000
 
 async function apiFetch<T>(request: HermesApiRequest): Promise<T> {
-  const { body, method = 'GET', path, profile, timeoutMs } = request
-  let url = baseUrl() + path
+  const { body, connectionId, method = 'GET', path, profile, timeoutMs, upload } = request
+  const target = targetForId(connectionId)
+  let url = target.base + path
 
   if (profile) {
     url += `${url.includes('?') ? '&' : '?'}profile=${encodeURIComponent(profile)}`
   }
 
-  const token = resolveToken()
   const headers: Record<string, string> = {}
+  let payload: BodyInit | undefined
 
-  if (body !== undefined) {headers['Content-Type'] = 'application/json'}
+  if (upload) {
+    // Single-file multipart upload (FastAPI UploadFile); the browser sets the
+    // multipart Content-Type with its boundary.
+    const form = new FormData()
+    form.append('file', new Blob([upload.bytes], { type: upload.contentType || 'application/octet-stream' }), upload.filename)
+    payload = form
+  } else if (body !== undefined) {
+    headers['Content-Type'] = 'application/json'
+    payload = JSON.stringify(body)
+  }
 
-  if (token) {headers['X-Hermes-Session-Token'] = token}
+  if (target.token) {headers['X-Hermes-Session-Token'] = target.token}
 
-  const res = await fetch(withGatewayRoute(url, activeUpstreamOrigin()), {
+  const res = await fetch(withGatewayRoute(url, target.origin), {
     method,
     headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: payload,
     credentials: 'same-origin',
     signal: AbortSignal.timeout(timeoutMs ?? DEFAULT_API_TIMEOUT_MS)
   })
@@ -318,25 +402,159 @@ async function apiFetch<T>(request: HermesApiRequest): Promise<T> {
   return JSON.parse(text) as T
 }
 
-function connection(profile?: string | null): HermesConnection {
-  const token = resolveToken()
-
+function connection(target: GatewayTarget, profile?: string | null, registryScoped = false): HermesConnection {
   return {
-    baseUrl: baseUrl(),
+    baseUrl: target.base,
     mode: 'remote',
+    remoteKind: 'url',
     source: 'settings',
     // 'oauth' forces the renderer to re-resolve the WS URL through
     // getGatewayWsUrl on every reconnect, which cookie mode needs because
     // tickets are single-use.
-    authMode: token ? 'token' : 'oauth',
-    token,
-    wsUrl: token ? buildTokenWsUrl(token) : '',
+    authMode: target.token ? 'token' : 'oauth',
+    token: target.token,
+    wsUrl: target.token ? withGatewayRoute(buildTokenWsUrl(target), target.origin) : '',
     logs: [],
     isFullscreen: false,
     nativeOverlayWidth: 0,
     windowButtonPosition: null,
-    ...(profile ? { profile } : {})
+    connectionId: target.gateway.id,
+    registryScoped,
+    // One gateway serves every profile; a profile is a request scope on it.
+    ...(profile ? { profile, sharedRemote: true } : {})
   }
+}
+
+// --- v2 connection registry over the saved gateways ------------------------
+
+type RegistryChange = { connectionId: string; reason: 'removed' | 'saved' | 'updated' }
+const registryListeners = new Set<(change: RegistryChange) => void>()
+
+function emitRegistryChange(change: RegistryChange): void {
+  for (const listener of registryListeners) {
+    listener(change)
+  }
+}
+
+function toRegistryConnection(gateway: GatewayConnection): DesktopRegistryConnection {
+  return {
+    id: gateway.id,
+    // Every browser-reachable source is a URL gateway; local spawn, SSH and
+    // Hermes Cloud need the desktop app.
+    kind: 'remote',
+    label: gateway.name,
+    url: gateway.url || servingBase(),
+    authMode: gateway.authMode,
+    tokenSet: Boolean(gateway.token),
+    tokenPreview: gateway.token ? `...${gateway.token.slice(-4)}` : null
+  }
+}
+
+const LAUNCH_MODE_STORAGE_KEY = 'hermes-web.launch-mode'
+
+function registry(): DesktopConnectionsRegistry {
+  const activeId = getActiveGateway().id
+
+  return {
+    version: 2,
+    primary: activeId,
+    // Display preference only: the browser always resumes on the gateway it
+    // last used (primary and lastUsed are the same record here).
+    launchMode: readStored<'last-used' | 'primary'>(LAUNCH_MODE_STORAGE_KEY) ?? 'primary',
+    lastUsed: activeId,
+    // Tokens live in this origin's browser storage; there is no OS keychain to
+    // offer and no plaintext-on-disk opt-in to ask for.
+    secureTokenStorage: true,
+    connections: listGateways().map(toRegistryConnection)
+  }
+}
+
+function saveRegistryConnection(input: DesktopRegistryConnectionInput): DesktopRegistryConnection {
+  if (input.kind !== 'remote') {
+    throw new Error('Only URL gateways can be added in the browser. Local, SSH and Hermes Cloud sources need the desktop app.')
+  }
+
+  const url = (input.url ?? '').trim()
+  const block = classifyGatewayReach(url)
+
+  if (block) {
+    throw new Error(
+      block === 'mixed-content'
+        ? "This https page can't reach an http gateway."
+        : 'A browser can only reach a gateway served from this site. Enter it as a /prefix path routed to that gateway by your reverse proxy, or whitelist it for the dev proxy.'
+    )
+  }
+
+  // A URL equal to the serving origin is the zero-config default.
+  const stored = normalizeBase(url) === servingBase() ? '' : url
+  const authMode = input.authMode ?? 'oauth'
+
+  if (input.id && getGateway(input.id)) {
+    updateGateway(input.id, {
+      name: input.label,
+      url: stored,
+      authMode,
+      // An omitted token keeps the saved one.
+      ...(input.token !== undefined ? { token: input.token } : {})
+    })
+    emitRegistryChange({ connectionId: input.id, reason: 'updated' })
+
+    return toRegistryConnection(getGateway(input.id)!)
+  }
+
+  const id = addGateway({ name: input.label, url: stored, authMode, token: input.token })
+  emitRegistryChange({ connectionId: id, reason: 'saved' })
+
+  return toRegistryConnection(getGateway(id)!)
+}
+
+async function testGateway(target: GatewayTarget): Promise<DesktopConnectionTestResult> {
+  try {
+    const status = await fetchStatus(target.base, target.origin)
+
+    return { baseUrl: target.base, ok: true, reachable: true, version: status?.version ?? null }
+  } catch (error) {
+    return {
+      baseUrl: target.base,
+      ok: false,
+      reachable: false,
+      error: error instanceof Error ? error.message : String(error)
+    } as DesktopConnectionTestResult
+  }
+}
+
+// --- Profile preference (per browser) --------------------------------------
+
+const PROFILE_STORAGE_KEY = 'hermes-web.profile'
+const DEFAULT_ROUTE_STORAGE_KEY = 'hermes-web.default-profile-route'
+const defaultRouteListeners = new Set<(route: DesktopProfileRoute | null) => void>()
+
+function readStored<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key)
+
+    return raw ? (JSON.parse(raw) as T) : null
+  } catch {
+    return null
+  }
+}
+
+function writeStored(key: string, value: unknown): void {
+  try {
+    if (value === null) {
+      localStorage.removeItem(key)
+    } else {
+      localStorage.setItem(key, JSON.stringify(value))
+    }
+  } catch {
+    // best-effort: blocked storage just means the preference isn't remembered
+  }
+}
+
+function storeProfile(name: string | null): DesktopActiveProfile {
+  writeStored(PROFILE_STORAGE_KEY, name)
+
+  return { profile: name }
 }
 
 async function toConnectionConfig(stored: StoredConnection): Promise<DesktopConnectionConfig> {
@@ -357,7 +575,18 @@ async function toConnectionConfig(stored: StoredConnection): Promise<DesktopConn
     remoteOauthConnected,
     remoteTokenPreview: stored.remoteToken ? `...${stored.remoteToken.slice(-4)}` : null,
     remoteTokenSet: hasToken,
-    remoteUrl: stored.remoteUrl
+    // Browser storage is origin-scoped; there is no OS keychain or plaintext
+    // on-disk mode to report.
+    secureTokenStorage: true,
+    remoteTokenPlainText: false,
+    remoteUrl: stored.remoteUrl,
+    cloudOrg: '',
+    sshHost: '',
+    sshUser: '',
+    sshPort: null,
+    sshKeyPath: '',
+    sshRemoteHermesPath: '',
+    sshRemoteProfile: ''
   }
 }
 
@@ -419,7 +648,7 @@ function downloadBlob(blob: Blob, filename: string): void {
  * self-disable (terminal), or never reach the native path in remote mode
  * (git), or render nothing (zoom).
  */
-type WebBridge = Omit<Window['hermesDesktop'], 'terminal' | 'git' | 'zoom'>
+type WebBridge = Omit<NonNullable<Window['hermesDesktop']>, 'terminal' | 'git' | 'zoom'>
 
 /**
  * Chromium can resolve Clipboard API writes without updating the system
@@ -483,27 +712,67 @@ export function createWebBridge(): Window['hermesDesktop'] {
     : undefined
 
   const bridge: WebBridge = {
-    getConnection: async profile => connection(profile),
+    getConnection: async profile => connection(targetFor(getActiveGateway()), profile),
+    getConnectionFor: async ({ connectionId, profile }) => connection(targetForId(connectionId), profile, true),
     revalidateConnection: async () => ({ ok: true, rebuilt: false }),
     touchBackend: async () => ({ ok: true }),
-    getGatewayWsUrl: async () => {
-      // One origin for both the ticket mint and the socket connect, so the dev
-      // proxy routes them to the same gateway (a mismatch would 4403).
-      const origin = activeUpstreamOrigin()
-      const token = resolveToken()
+    // One target for both the ticket mint and the socket connect, so the dev
+    // proxy routes them to the same gateway (a mismatch would 4403).
+    getGatewayWsUrl: async () => gatewayWsUrl(targetFor(getActiveGateway())),
+    getGatewayWsUrlFor: async ({ connectionId }) => gatewayWsUrl(targetForId(connectionId)),
+    // Upstream switched the live socket; remember the source so un-scoped REST,
+    // caches and the next page load follow it.
+    setActiveConnectionRoute: route => {
+      if (route?.connectionId && getGateway(route.connectionId)) {
+        setActiveGateway(route.connectionId)
+      }
+    },
+    connections: {
+      list: async () => registry(),
+      save: async input => {
+        const saved = saveRegistryConnection(input)
 
-      if (token) {return withGatewayRoute(buildTokenWsUrl(token), origin)}
-      const ticket = await mintWsTicket(origin)
+        return { ok: true, connection: saved, registry: registry() }
+      },
+      remove: async id => {
+        if (listGateways().length <= 1) {
+          throw new Error('The last gateway cannot be removed.')
+        }
 
-      return withGatewayRoute(`${wsBaseUrl()}/api/ws?ticket=${encodeURIComponent(ticket)}`, origin)
+        removeGateway(id)
+        emitRegistryChange({ connectionId: id, reason: 'removed' })
+
+        return { ok: true, registry: registry() }
+      },
+      setPrimary: async id => {
+        setActiveGateway(id)
+
+        return { ok: true, registry: registry() }
+      },
+      setLaunchMode: async mode => {
+        writeStored(LAUNCH_MODE_STORAGE_KEY, mode)
+
+        return { ok: true, registry: registry() }
+      },
+      setLastUsed: async id => {
+        setActiveGateway(id)
+
+        return { ok: true, registry: registry() }
+      },
+      test: async id => testGateway(targetForId(id)),
+      onChanged: callback => {
+        registryListeners.add(callback)
+
+        return () => registryListeners.delete(callback)
+      }
+    },
+    getProfileRoutes: async profiles => {
+      const connectionId = getActiveGateway().id
+
+      return profiles.map(profile => ({ connectionId, mode: 'remote', profile, targetProfile: profile }))
     },
     openSessionWindow: async sessionId => {
       const opened = window.open(`${window.location.pathname}#/${sessionId}`, '_blank', 'noopener')
-
-      return opened ? { ok: true } : { ok: false, error: 'popup-blocked' }
-    },
-    openNewSessionWindow: async () => {
-      const opened = window.open(`${window.location.pathname}#/`, '_blank', 'noopener')
 
       return opened ? { ok: true } : { ok: false, error: 'popup-blocked' }
     },
@@ -606,8 +875,22 @@ export function createWebBridge(): Window['hermesDesktop'] {
       return { ok: true, connected: false }
     },
     profile: {
-      get: async () => ({ profile: null }),
-      set: async name => ({ profile: name })
+      getDefault: async () => readStored<DesktopProfileRoute>(DEFAULT_ROUTE_STORAGE_KEY),
+      setDefault: async route => {
+        writeStored(DEFAULT_ROUTE_STORAGE_KEY, route)
+        defaultRouteListeners.forEach(listener => listener(route))
+
+        return route
+      },
+      onDefaultChanged: callback => {
+        defaultRouteListeners.add(callback)
+
+        return () => defaultRouteListeners.delete(callback)
+      },
+      get: async () => ({ profile: readStored<string>(PROFILE_STORAGE_KEY) }),
+      remember: async name => storeProfile(name),
+      // No local backend to relaunch: the gateway serves every profile.
+      set: async name => storeProfile(name)
     },
     api: apiFetch,
     notify: webNotify,
@@ -701,8 +984,66 @@ export function createWebBridge(): Window['hermesDesktop'] {
       log: [],
       startedAt: null,
       completedAt: null,
-      unsupportedPlatform: null
+      setupChoice: null,
+      unsupportedPlatform: null,
+      // Nothing to install or repair from a browser tab: report "bundled" so
+      // recovery never offers the installer.
+      bundled: true
     }),
+    continueBootstrapLocal: async () => ({ ok: true }),
+    getSyncStatus: async () => null,
+    // --- Electron-only surfaces: honest browser equivalents or inert stubs ---
+    // Hermes Cloud sign-in needs the desktop's OAuth partition.
+    cloud: {
+      status: async () => ({ portalBaseUrl: '', signedIn: false }),
+      login: async () => ({ portalBaseUrl: '', signedIn: false, ok: false }),
+      logout: async () => ({ portalBaseUrl: '', signedIn: false, ok: true }),
+      discover: async () => ({ agents: [] }),
+      agentSignIn: async dashboardUrl => ({ baseUrl: dashboardUrl, connected: false })
+    },
+    // No per-profile backend pool: the gateway serves every profile itself.
+    getPoolLimits: async () => ({ maxBackends: 0, idleMs: 0 }),
+    setPoolLimits: async () => ({ ok: false, limits: { maxBackends: 0, idleMs: 0 } }),
+    // The browser's own find (Ctrl/Cmd+F) covers the page.
+    findInPage: async () => ({ count: 0 }),
+    stopFindInPage: async () => undefined,
+    onFoundInPage: unsubscribed,
+    onOpenFindBarRequested: unsubscribed,
+    // The global quick-entry window is an OS-level shortcut.
+    quickEntry: {
+      getSettings: async () => ({ enabled: false, error: null, registered: false, shortcut: '' }),
+      setSettings: async () => ({ enabled: false, error: null, registered: false, shortcut: '' }),
+      submit: noop,
+      dismiss: noop,
+      pushState: noop,
+      onState: unsubscribed,
+      onSubmit: unsubscribed,
+      onShown: unsubscribed
+    },
+    windowControls: { custom: false, minimize: noop, toggleMaximize: noop, close: noop },
+    openSessionInTerminal: async () => ({ ok: false, error: 'No local terminal in the browser.' }),
+    openWindow: async () => {
+      const opened = window.open(window.location.href.split('#')[0], '_blank', 'noopener')
+
+      return opened ? { ok: true } : { ok: false, error: 'popup-blocked' }
+    },
+    openBrowserWindow: async () => ({ ok: false, error: 'Pop-out windows need the desktop app.' }),
+    onBrowserPopoutClosed: unsubscribed,
+    // One tab, one cue.
+    claimAmbientCue: async () => true,
+    getSecretStorageEncryption: async () => ({ on: false }),
+    setSecretStorageEncryption: async () => ({ on: false }),
+    sshConfigHosts: async () => ({ hosts: [] }),
+    sshResolveHost: async () => ({ hostname: null, identityFile: null, port: null, user: null }),
+    readClipboard: async () => {
+      try {
+        return await navigator.clipboard.readText()
+      } catch {
+        return ''
+      }
+    },
+    // No disk to stage a large paste on: '' keeps it inline in the composer.
+    savePastedText: async () => '',
     resetBootstrap: async () => ({ ok: true }),
     repairBootstrap: async () => ({ ok: true }),
     cancelBootstrap: async () => ({ ok: true, cancelled: true }),

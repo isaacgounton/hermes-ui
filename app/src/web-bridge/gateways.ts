@@ -8,10 +8,11 @@
  * gateway's /api/profiles. Gateways are whole servers, chosen here on the
  * client and persisted in the browser.
  *
- * Only one gateway is active at a time. Switching sets the active id and
- * reloads the app so the whole boot path re-runs against the new connection
- * (the same thing "Save and reconnect" does). This module is the single source
- * of truth; the window.hermesDesktop bridge reads the active gateway from here.
+ * The bridge exposes these as upstream's v2 connection registry
+ * (`hermesDesktop.connections`), so upstream's own source switcher and
+ * Settings -> Gateway manage them; upstream performs the in-place switch and
+ * reports the active source back through `setActiveConnectionRoute`. This
+ * module is the single source of truth for the saved list.
  */
 import { atom } from 'nanostores'
 
@@ -196,9 +197,8 @@ export function withGatewayRoute(url: string, upstreamOrigin: string | null): st
  * param - the IDP controls the URL) still routes to the right upstream. No-op in
  * production; cleared for the default ('') and `/prefix` gateways.
  */
-export function syncDevGatewayCookie(): void {
+export function syncDevGatewayCookie(origin: string | null = activeUpstreamOrigin()): void {
   if (!Array.isArray(window.__HERMES_GATEWAY_WHITELIST__)) { return }
-  const origin = activeUpstreamOrigin()
   document.cookie = origin
     ? `${DEV_GATEWAY_COOKIE}=${encodeURIComponent(origin)}; path=/; SameSite=Lax`
     : `${DEV_GATEWAY_COOKIE}=; path=/; Max-Age=0; SameSite=Lax`
@@ -324,6 +324,10 @@ export function listGateways(): GatewayConnection[] {
   return load().gateways
 }
 
+export function getGateway(id: string): GatewayConnection | undefined {
+  return load().gateways.find(g => g.id === id)
+}
+
 export function getActiveGateway(): GatewayConnection {
   const store = load()
 
@@ -372,31 +376,17 @@ export function removeGateway(id: string): void {
   commit(store)
 }
 
-// Soft switch: swap gateways in-app — the boot hook reboots the socket against
-// the new gateway and the sidebar cache swaps the shell, all keyed off the
-// $activeGatewayId change `commit()` emits below. This avoids the full-page
-// reload (bundle re-parse + blank connecting screen) on every switch. Flip to
-// false to restore the old reload-on-switch behavior as a fallback.
-const SOFT_GATEWAY_SWITCH = true
-
 /**
- * Set the active gateway. By default this is now a soft in-app swap; pass
- * `{ reload: true }` to force the legacy full-page reload.
+ * Record the active gateway: the one `getConnection()` and un-scoped REST calls
+ * resolve to, and the one the next page load starts on. Store-only - upstream
+ * has already switched the live socket by the time it reports the route.
  */
-export function setActiveGateway(id: string, opts: { reload?: boolean } = {}): void {
+export function setActiveGateway(id: string): void {
   const store = load()
 
   if (!store.gateways.some(g => g.id === id) || store.activeId === id) { return }
   store.activeId = id
-  // Emits $activeGatewayId, which drives the soft swap (boot reboot + sidebar
-  // shell swap). Routing must be updated first so the new socket and any OAuth
-  // callback navigation both target the newly active gateway.
   commit(store)
+  // Routing first, so an OAuth callback navigation targets this gateway.
   syncDevGatewayCookie()
-
-  const reload = opts.reload ?? !SOFT_GATEWAY_SWITCH
-
-  if (reload) {
-    setTimeout(() => window.location.reload(), 50)
-  }
 }

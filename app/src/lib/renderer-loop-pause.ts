@@ -5,7 +5,7 @@ interface WindowStatePayload {
 
 export const RENDERER_ANIMATIONS_PAUSED_ATTRIBUTE = 'data-renderer-animations-paused'
 
-export function createRendererLoopPauseController(onChange: () => void, { pauseWhenUnfocused = true } = {}) {
+export function createRendererLoopPauseController(onChange: () => void, { pauseWhenUnfocused = false } = {}) {
   let windowPaused = false
   let windowFocused = document.hasFocus()
 
@@ -25,13 +25,8 @@ export function createRendererLoopPauseController(onChange: () => void, { pauseW
     }
   }
 
-  // Web port: this bridge event is typed against the older HermesWindowState
-  // shape here (and stubbed to a no-op unsubscribe on the web bridge), so the
-  // minimized/visible fields are read defensively instead of retyping the
-  // callback.
-  const offWindowState = window.hermesDesktop?.onWindowStateChanged?.(payload => {
-    const state = payload as unknown as WindowStatePayload
-    const next = state?.isMinimized === true || state?.isVisible === false
+  const offWindowState = window.hermesDesktop?.onWindowStateChanged?.((payload: WindowStatePayload) => {
+    const next = payload?.isMinimized === true || payload?.isVisible === false
 
     if (windowPaused === next) {
       return
@@ -42,8 +37,11 @@ export function createRendererLoopPauseController(onChange: () => void, { pauseW
   })
 
   document.addEventListener('visibilitychange', onVisibilityChange)
-  window.addEventListener('blur', onBlur)
-  window.addEventListener('focus', onFocus)
+
+  if (pauseWhenUnfocused) {
+    window.addEventListener('blur', onBlur)
+    window.addEventListener('focus', onFocus)
+  }
 
   return {
     dispose: () => {

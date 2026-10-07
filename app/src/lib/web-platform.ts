@@ -15,12 +15,13 @@
 /**
  * True when running as the browser (web) build rather than inside Electron.
  *
- * Signal: the web bridge intentionally OMITS `terminal` (a local PTY has no
- * browser equivalent), so its absence is a reliable, stable marker of the web
- * build. Electron always ships a real `terminal` bridge.
+ * Signal: `web-bridge/install.ts` sets `window.__HERMES_WEB__` when it installs
+ * the web bridge. Explicit rather than inferred from a missing bridge member,
+ * so a test that stubs a partial `window.hermesDesktop` is not mistaken for
+ * the web build.
  */
 export function isWebPlatform(): boolean {
-  return typeof window !== 'undefined' && !window.hermesDesktop?.terminal
+  return typeof window !== 'undefined' && window.__HERMES_WEB__ === true
 }
 
 /**

@@ -1,8 +1,8 @@
-import { SIDEBAR_COLLAPSE_MEDIA_QUERY } from '@/app/layout-constants'
-
 import { useMediaQuery } from './use-media-query'
 
-// Mobile-intent flag. Shares the single responsive breakpoint with the shell's
-// sidebar collapse (SIDEBAR_COLLAPSE_BREAKPOINT_PX) so "the rails collapsed" and
-// "we're on a phone" can never disagree by a pixel.
-export const useIsMobile = () => useMediaQuery(SIDEBAR_COLLAPSE_MEDIA_QUERY)
+/** Narrower than this and the sidebar stops being a docked column: it renders
+ *  as a floating Sheet over the content instead (components/ui/sidebar.tsx).
+ *  Anything that sizes a window around a docked sidebar has to clear it. */
+export const DOCKED_SIDEBAR_MIN_PX = 768
+
+export const useIsMobile = () => useMediaQuery(`(max-width: ${(DOCKED_SIDEBAR_MIN_PX - 1) / 16}rem)`)

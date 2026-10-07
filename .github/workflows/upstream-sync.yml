@@ -1,0 +1,116 @@
+# Pull new Hermes desktop releases into hermes-ui.
+#
+# Weekly (and on demand) this runs scripts/sync-upstream.sh against the newest
+# hermes-agent release tag. A clean merge that builds and passes the UI tests
+# becomes a ready-for-review PR; anything else becomes a draft PR listing what
+# needs a human (or agent) to finish. Nothing is merged automatically.
+name: Upstream sync
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: hermes-agent tag, branch or commit (default = newest vYYYY.M.D release)
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch the vendor branch
+        run: git fetch origin vendor/upstream:vendor/upstream
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Merge the upstream release
+        id: sync
+        env:
+          REF_INPUT: ${{ inputs.ref }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          set +e
+          scripts/sync-upstream.sh ${REF_INPUT:+"$REF_INPUT"}
+          code=$?
+          set -e
+          [ "$code" -le 2 ] || exit "$code"
+
+      - name: Skip if a PR for this release already exists
+        id: existing
+        if: steps.sync.outputs.status != 'up-to-date'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh pr list --head '${{ steps.sync.outputs.branch }}' --state all --json number --jq 'length' | grep -qv '^0$'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and test
+        id: verify
+        if: steps.sync.outputs.status == 'clean' && steps.existing.outputs.skip != 'true'
+        working-directory: app
+        run: |
+          set +e
+          bun install && bun run build && bunx vitest run --project ui
+          echo "ok=$([ $? -eq 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Open the pull request
+        if: steps.sync.outputs.status != 'up-to-date' && steps.existing.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS: ${{ steps.sync.outputs.status }}
+          VERIFIED: ${{ steps.verify.outputs.ok }}
+          REF: ${{ steps.sync.outputs.ref }}
+          SHA: ${{ steps.sync.outputs.sha }}
+          BRANCH: ${{ steps.sync.outputs.branch }}
+          CONFLICTS: ${{ steps.sync.outputs.conflicts }}
+          DRIFT: ${{ steps.sync.outputs.drift }}
+        run: |
+          draft=--draft
+          if [ "$STATUS" = conflicts ]; then
+            # Commit the markers so the branch is reviewable; the draft PR is the to-do list.
+            git add -A
+            git commit --no-edit -q
+            summary="The merge stopped on conflicts. Resolve the files below (keep \`hermes-ui:\` patches minimal), then run the build and UI tests."
+          elif [ "$VERIFIED" = true ]; then
+            draft=
+            summary="Merged cleanly; \`bun run build\` and the UI test suite pass."
+          else
+            summary="Merged cleanly, but the build or UI tests fail. See the workflow run for details."
+          fi
+          # vendor/upstream only ever fast-forwards; the sync branch is ours to replace.
+          git push origin vendor/upstream
+          git push --force origin "$BRANCH"
+          body=$(cat <<BODY
+          Syncs the Hermes desktop renderer to hermes-agent \`$REF\` (\`$SHA\`).
+
+          $summary
+
+          **Conflicted files**
+          \`\`\`
+          ${CONFLICTS:-(none)}
+          \`\`\`
+
+          **Upstream renderer dependency changes** (apply to \`app/package.json\` if needed)
+          \`\`\`
+          ${DRIFT:-(none)}
+          \`\`\`
+
+          See UPSTREAM.md for how the vendor branch and the local web layer fit together.
+          BODY
+          )
+          gh pr create $draft --base main --head "$BRANCH" --title "Sync Hermes desktop $REF" --body "$body"

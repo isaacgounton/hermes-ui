@@ -100,7 +100,7 @@ This keeps the app tiny, portable, and easy to serve from the gateway itself, fr
 For the extraction plan and provenance, see:
 
 - [PLAN.md](PLAN.md) - the plan behind this repo.
-- [UPSTREAM.md](UPSTREAM.md) - upstream commit, what was changed, and how to re-sync.
+- [UPSTREAM.md](UPSTREAM.md) - how upstream is tracked, the local web layer, and how to sync a new desktop release.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -153,7 +153,7 @@ https://github.com/user-attachments/assets/9d45bc37-b77a-4278-91cd-3c91af837689
 ### Prerequisites
 
 - [bun](https://bun.sh) as the package manager and script runner.
-- A running Hermes gateway (`hermes serve` or `hermes dashboard`, FastAPI, default port `9119`).
+- A running Hermes gateway (`hermes dashboard`, FastAPI, default port `9119`).
 
 The gateway is meant to run on loopback (`127.0.0.1`, the default).
 Run the UI and the gateway on the same machine and reach it at `127.0.0.1`.
@@ -171,7 +171,7 @@ cd hermes-ui
 ```
 
 - `bin/dev` proxies to `http://127.0.0.1:9119` by default; override with `HERMES_GATEWAY_URL=http://host:port ./bin/dev`.
-- `bin/prod` passes any extra arguments through to `hermes serve`, for example `./bin/prod --port 9200`.
+- `bin/prod` passes any extra arguments through to `hermes dashboard`, for example `./bin/prod --port 9200`.
 
 > [!TIP]
 > For gateways using OAuth, prefer `bin/prod`: the login redirect must return to the same origin the app was served from, which the gateway-hosted path guarantees.
@@ -210,7 +210,7 @@ bun run build
 Then start the gateway with the built bundle:
 
 ```sh
-HERMES_WEB_DIST="$(pwd)/dist" hermes serve
+HERMES_WEB_DIST="$(pwd)/dist" hermes dashboard --no-open
 ```
 
 Or use the helper, which resolves the absolute path and exports the variable for you:
@@ -258,11 +258,11 @@ Serving the static files and proxying the API paths on the same origin preserves
 
 ### Choosing the gateway from inside the app
 
-The connection is editable at runtime in **Settings -> Gateway**, exactly like the desktop app.
+The connection is editable at runtime in **Settings -> Gateways**, exactly like the desktop app.
 It defaults to the origin the app was served from, so the gateway-hosted and dev-proxy paths need no configuration.
 
 You can point it at another gateway URL (an absolute `https://host` or a `/prefix` path on the serving origin) and choose token or OAuth authentication; the choice is saved in the browser.
-You can save multiple gateways (personal, company, and so on) and switch between them; the list lives in the browser.
+You can save multiple gateways (personal, company, and so on) under **Settings -> Gateways -> Saved connections** and switch between them from the Sessions source switcher, just like the desktop app's connection registry; the list lives in the browser.
 
 The same-origin constraint below still applies to whatever URL you enter.
 
@@ -337,7 +337,7 @@ The gateway's `mount_spa()` serves a static directory selected by the `HERMES_WE
 - Before serving `index.html`, the gateway injects the session token as `window.__HERMES_SESSION_TOKEN__` in a `<script>` tag placed just before `</head>`, so the SPA can authenticate against protected endpoints in loopback/token mode.
 
 > [!NOTE]
-> `hermes serve` respects `HERMES_SERVE_HEADLESS=1` and will refuse to serve the SPA when it is set; leave it unset to host the UI.
+> Host the UI with `hermes dashboard`. Since Hermes 2026.9, `hermes serve` is a headless backend (it sets `HERMES_SERVE_HEADLESS=1`) and only answers with a "web UI disabled" page.
 
 The Vite build uses `base: './'` (`app/vite.config.ts`), so asset URLs in the built `index.html` are relative (for example `./assets/index-*.js`), which resolves correctly when the bundle is served at the domain root.
 
@@ -351,7 +351,8 @@ The Vite build uses `base: './'` (`app/vite.config.ts`), so asset URLs in the bu
 | Blank page or 404 on assets | `HERMES_WEB_DIST` is wrong or not absolute. It must be the absolute path to `app/dist`, and that directory must contain both `index.html` and an `assets/` subdirectory. |
 | WebSocket closes with code `4403` | The app is not same-origin with the gateway. Serve it via option A, B, or C so the browser origin matches the gateway. |
 | Cross-origin fetch failures (CORS errors, missing cookies) | Same root cause as the `4403` case - the UI is served from an origin the gateway does not trust. Make it same-origin. |
-| `hermes serve` returns 404 JSON for every page | Either the bundle was not found at `HERMES_WEB_DIST`, or `HERMES_SERVE_HEADLESS=1` is set (which disables the SPA on purpose). |
+| The page says "Headless backend (hermes serve): web UI disabled" | The gateway was started with `hermes serve`, which never serves a UI. Start it with `hermes dashboard` (as `bin/prod` does). |
+| 404 JSON for every page | The bundle was not found at `HERMES_WEB_DIST`. |
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -380,12 +381,21 @@ Any contributions you make are **greatly appreciated**.
 
 1. Fork the project.
 2. Create your feature branch (`git checkout -b feat/amazing-feature`).
-3. Run the checks in `app/`: `bun run typecheck`, `bun run lint`, and `bun run test:ui`.
+3. Run the checks in `app/`: `bun run typecheck`, `bun run lint`, and `bun run test:ui` (the full vitest `ui` project).
 4. Commit your changes (`git commit -m 'feat: add amazing feature'`).
 5. Push to the branch (`git push origin feat/amazing-feature`).
 6. Open a pull request.
 
 Keep local modifications minimal and centralized in `app/src/web-bridge/` so upstream diffs stay clean (see [UPSTREAM.md](UPSTREAM.md)).
+
+### Staying in sync with Hermes desktop
+
+The renderer tracks upstream through a `vendor/upstream` branch, so pulling a new desktop release is a `git merge` that re-applies the web layer automatically.
+
+- **Automatically:** `.github/workflows/upstream-sync.yml` checks for a new hermes-agent release every Monday (or on demand from the Actions tab) and opens a PR. Clean merges that build and pass the tests are ready to review; anything else arrives as a draft listing the conflicts.
+- **By hand:** `scripts/sync-upstream.sh [ref]`, then `cd app && bun install && bun run build && bunx vitest run --project ui`.
+
+Don't sync past the gateway version you run (`hermes --version`); the renderer calls RPCs older gateways lack.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 

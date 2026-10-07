@@ -2,8 +2,14 @@
   "compilerOptions": {
     "target": "ES2023",
     "useDefineForClassFields": true,
-    "lib": ["DOM", "DOM.Iterable", "ES2023"],
-    "types": ["node"],
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+      "ES2023"
+    ],
+    "types": [
+      "node"
+    ],
     "allowJs": false,
     "skipLibCheck": true,
     "esModuleInterop": true,
@@ -15,11 +21,32 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "react-jsx",
+    "noEmit": true,
     "paths": {
-      "@/*": ["./src/*"],
-      "@hermes/plugin-sdk": ["./src/sdk/index.ts"],
-      "@hermes/shared": ["../shared/src/index.ts"]
+      "@/*": [
+        "./src/*"
+      ],
+      "@hermes/plugin-sdk": [
+        "./src/sdk/index.ts"
+      ],
+      "@hermes/shared/billing": [
+        "../shared/src/billing-types.ts"
+      ],
+      "@hermes/shared/*": [
+        "../shared/src/*"
+      ],
+      "@hermes/shared": [
+        "../shared/src/index.ts"
+      ]
     }
   },
-  "include": ["src", "../shared/src"]
+  "include": [
+    "src",
+    "electron",
+    "../shared/src"
+  ],
+  "exclude": [
+    "../shared/src/**/*.test.ts",
+    "../shared/src/**/*.test-d.ts"
+  ]
 }

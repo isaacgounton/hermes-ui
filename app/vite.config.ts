@@ -1,7 +1,6 @@
-/// <reference types="vitest/config" />
+import babel from '@rolldown/plugin-babel'
+import react, { reactCompilerPreset } from '@vitejs/plugin-react'
 import { defineConfig, type Plugin } from 'vite'
-import { configDefaults } from 'vitest/config'
-import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
@@ -9,6 +8,7 @@ import { PWA_WORKBOX_OPTIONS } from './src/pwa/workbox-options'
 import { createProxyServer, type ProxyServer } from 'http-proxy-3'
 import crypto from 'node:crypto'
 import fs from 'fs'
+import { createRequire } from 'module'
 import path from 'path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
@@ -282,14 +282,82 @@ function hermesDynamicProxy(): Plugin {
   }
 }
 
-export default defineConfig({
+// --- Upstream renderer build helpers (hermes-agent apps/desktop/vite.config.ts) ---
+
+/** React Compiler preset scoped to modules that can actually contain
+ *  components/hooks (JSX syntax or a react-ish import). */
+function compilerPreset() {
+  const preset = reactCompilerPreset()
+  preset.rolldown.filter.code = /\/>|<\/|from\s*['"][^'"]*react/
+
+  return preset
+}
+
+// Resolve react/react-dom from this package so the pair always matches
+// ("Minified React error #527" otherwise).
+const requireFromApp = createRequire(path.join(__dirname, 'vite.config.ts'))
+const reactDir = path.dirname(requireFromApp.resolve('react/package.json'))
+const reactDomDir = path.dirname(requireFromApp.resolve('react-dom/package.json'))
+
+// Dev-only render/state churn counters (src/debug) are aliased out of builds.
+const debugEntry = (command: string, env: Record<string, string>) =>
+  command === 'serve' || env.VITE_PERF_PROBE === '1'
+    ? path.resolve(__dirname, './src/debug/dev-only.ts')
+    : path.resolve(__dirname, './src/debug/dev-only.noop.ts')
+
+// The emoji picker (frimousse) fetches `<emojibaseUrl>/<locale>/data.json` at
+// runtime. Serve the bundled emojibase-data at a stable local path instead of a
+// CDN: middleware in dev, emitted assets in the build.
+const emojibaseDir = (() => {
+  try {
+    return fs.realpathSync(path.resolve(__dirname, 'node_modules/emojibase-data'))
+  } catch {
+    return null
+  }
+})()
+
+const EMOJIBASE_PATH = /^[a-z-]+\/(data|messages|shortcodes\/emojibase)\.json$/
+
+function emojibaseAssets(): Plugin {
+  return {
+    name: 'hermes:emojibase-assets',
+    configureServer(server) {
+      server.middlewares.use('/emojibase', (req, res, next) => {
+        const rel = (req.url ?? '').split('?')[0].replace(/^\/+/, '')
+
+        if (!emojibaseDir || !EMOJIBASE_PATH.test(rel)) {
+          return next()
+        }
+        fs.readFile(path.join(emojibaseDir, rel), (err, buf) => {
+          if (err) {
+            return next()
+          }
+          res.setHeader('Content-Type', 'application/json')
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+          res.end(buf)
+        })
+      })
+    },
+    generateBundle() {
+      if (!emojibaseDir) {
+        return
+      }
+
+      for (const rel of ['en/data.json', 'en/messages.json', 'en/shortcodes/emojibase.json']) {
+        this.emitFile({
+          type: 'asset',
+          fileName: `emojibase/${rel}`,
+          source: fs.readFileSync(path.join(emojibaseDir, rel))
+        })
+      }
+    }
+  }
+}
+
+const driverMain = path.dirname(requireFromApp.resolve('driver.js'))
+
+export default defineConfig(({ command }) => ({
   base: './',
-  // Bundled-plugin suites (src/plugins/*/tests) are plain `node:test` files
-  // adopted verbatim from upstream — they run via `npm run test:plugins`, not
-  // vitest, so exclude them from vitest's default glob.
-  test: {
-    exclude: [...configDefaults.exclude, 'src/plugins/*/tests/**']
-  },
   // Per-build id, read by the React Query persistence layer as a cache buster so
   // a redeploy (or dev restart) drops any persisted query blob whose data shape
   // may have changed. Computed once at config load.
@@ -302,7 +370,9 @@ export default defineConfig({
     // gateway origins fold through the same-origin proxy (see normalizeBase).
     hermesDynamicProxy(),
     react(),
+    babel({ presets: [compilerPreset()] }),
     tailwindcss(),
+    emojibaseAssets(),
     VitePWA({
       registerType: 'autoUpdate',
       // We register the SW ourselves from src/pwa/register.ts.
@@ -339,58 +409,69 @@ export default defineConfig({
     postcss: { plugins: [] }
   },
   build: {
-    // Split chunks are content-hashed and served under ./assets from one
-    // origin (base: './'), so a multi-chunk bundle is served fine by the
-    // gateway's static host. This warns only if a single chunk is still huge.
-    chunkSizeWarningLimit: 4000,
+    // Upstream's chunking: a handful of named vendor chunks. Shared foundations
+    // come FIRST (first match wins) so the entry never statically imports a
+    // heavy lazy chunk just to reach react/hast utils, and react-router +
+    // react-query are grouped so there is exactly ONE runtime of each (a second
+    // react-query copy breaks QueryClientProvider - upstream #95560). Heavy
+    // lazy-only families (mermaid, shiki, katex) get their own chunks.
+    chunkSizeWarningLimit: 25000,
     rolldownOptions: {
-      // Rolldown (rolldown-vite) drives the build, so chunking config lives
-      // here rather than under rollupOptions. `codeSplitting` accepts a boolean
-      // or a CodeSplittingOptions object; the object form both ENABLES splitting
-      // and declares advanced chunk groups (rolldown's replacement for rollup's
-      // manualChunks - see rolldown's CodeSplittingOptions type).
-      //
-      // Enabling splitting is the whole point: it lets the lazy() route
-      // boundaries in desktop-controller and the libraries' own dynamic imports
-      // (shiki loads each language on demand, mermaid each diagram type) pay off.
-      // Those were inlined into one ~27 MB chunk while splitting was off. With
-      // it on, the boot-critical static-import closure drops to ~4 MB and the
-      // parse-costly libs - mermaid, shiki, @xterm, @codemirror - fall out of it
-      // into async chunks, loaded only when their feature is opened.
-      //
-      // We deliberately DON'T force those heavy libs into manual groups. shiki,
-      // codemirror, xterm and katex are each partially reachable from the boot
-      // path (the chat view highlights code at load), so collapsing all of a
-      // library's modules into one named chunk promotes that entire chunk -
-      // including every lazily-loadable language/diagram - back onto the boot
-      // path, undoing the win (measured: ~26 MB boot-critical with such groups
-      // vs ~4 MB without). rolldown's automatic splitting already keeps the
-      // boot-reachable slivers separate from the async bulk, so we let it.
-      //
-      // The one group we do keep is react/react-dom: it is boot-critical either
-      // way, so pinning it to a stable, content-addressed vendor chunk costs no
-      // boot bytes and improves cross-deploy cache hits. `[\\/]` matches the
-      // path separator cross-platform (rolldown's guidance).
       output: {
-        codeSplitting: {
+        advancedChunks: {
           groups: [
             {
-              name: 'react-vendor',
-              test: /[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/,
-              priority: 10
-            }
+              name: 'vendor-react',
+              test: /node_modules[\\/](react|react-dom|scheduler|react-router|@tanstack[\\/]react-query)[\\/]/
+            },
+            {
+              name: 'vendor-md',
+              test: /node_modules[\\/](property-information|hast-util-[^\\/]+|mdast-util-[^\\/]+|micromark[^\\/]*|unist-util-[^\\/]+|vfile[^\\/]*|unified|stringify-entities|space-separated-tokens|comma-separated-tokens|zwitch|html-void-elements|devlop|style-to-js|style-to-object|clsx)[\\/]/
+            },
+            {
+              name: 'vendor-util',
+              test: /node_modules[\\/](lodash-es|es-toolkit|uuid|dayjs|d3-array|d3-color|d3-force|d3-interpolate|d3-time[^\\/]*|dompurify|stylis)[\\/]/
+            },
+            {
+              name: 'mermaid',
+              test: /node_modules[\\/](mermaid|cytoscape|dagre|khroma|elkjs|d3|d3-[^\\/]+|@mermaid-js)[\\/]/
+            },
+            {
+              name: 'shiki',
+              test: /node_modules[\\/](shiki|@shikijs|react-shiki|@streamdown[\\/]code|oniguruma-to-es|oniguruma-parser|regex(-[^\\/]+)?)[\\/]/
+            },
+            { name: 'katex', test: /node_modules[\\/]katex[\\/]/ }
           ]
         }
       }
     }
   },
+  // driver.js only enters the graph through the tour's dynamic import chain;
+  // serve it unoptimized so its `?raw` IIFE import keeps working in dev.
+  optimizeDeps: {
+    exclude: [
+      'driver.js',
+      'driver.js/dist/driver.js.iife.js',
+      'driver.js/dist/driver.js.iife.js?raw',
+      'driver.js/dist/driver.css?raw'
+    ]
+  },
   resolve: {
     alias: {
+      '@/debug/dev-only': debugEntry(command, process.env as Record<string, string>),
       '@': path.resolve(__dirname, './src'),
       '@hermes/plugin-sdk': path.resolve(__dirname, './src/sdk/index.ts'),
-      '@hermes/shared': path.resolve(__dirname, '../shared/src')
+      '@hermes/shared/billing': path.resolve(__dirname, '../shared/src/billing-types.ts'),
+      // Also covers subpaths ('@hermes/shared/skin' -> ../shared/src/skin).
+      '@hermes/shared': path.resolve(__dirname, '../shared/src'),
+      'driver.js/dist/driver.js.iife.js?raw': `${path.join(driverMain, 'driver.js.iife.js')}?raw`,
+      'driver.js/dist/driver.js.iife.js': path.join(driverMain, 'driver.js.iife.js'),
+      react: reactDir,
+      'react-dom': reactDomDir,
+      'react/jsx-dev-runtime': path.join(reactDir, 'jsx-dev-runtime.js'),
+      'react/jsx-runtime': path.join(reactDir, 'jsx-runtime.js')
     },
-    dedupe: ['react', 'react-dom']
+    dedupe: ['react', 'react-dom', 'react-router', '@tanstack/react-query']
   },
   server: {
     // /api, /auth, /login (+ the /api/ws upgrade) are handled by
@@ -404,4 +485,4 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 4174
   }
-})
+}))

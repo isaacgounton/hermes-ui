@@ -31,3 +31,6 @@ config.json
 
 .worktree
 .worktrees
+
+# Upstream hermes-agent clone used by scripts/sync-upstream.sh
+.cache/

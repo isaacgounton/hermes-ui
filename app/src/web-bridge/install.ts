@@ -12,6 +12,8 @@ import { createWebBridge } from './bridge'
 
 if (typeof window !== 'undefined' && !window.hermesDesktop) {
   window.hermesDesktop = createWebBridge()
+  // Read by lib/web-platform isWebPlatform().
+  window.__HERMES_WEB__ = true
 }
 
 export {}
